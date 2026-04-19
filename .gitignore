@@ -1,0 +1,13 @@
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+.idea/
+build/
+*.bin
+*.elf
+*.hex
+*.map
+*.o
+*.a
+.DS_Store
