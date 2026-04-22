@@ -35,4 +35,8 @@ bool hasCue();
 bool isPlaying();
 bool isPaused();
 
+// Byte offset into the source file. Useful as a liveness signal: if
+// this climbs, the copier is actually draining bytes. 0 when stopped.
+uint32_t filePosition();
+
 } // namespace player

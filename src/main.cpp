@@ -24,25 +24,69 @@ bool hasAudioExt(const char* name) {
     return strcasecmp(e, ".mp3") == 0 || strcasecmp(e, ".wav") == 0;
 }
 
-void scanSD() {
-    fileCount = 0;
-    if (!SD_MMC.begin("/sdcard", true /* 1-bit mode */)) {
-        ui::showMessage("SD mount failed");
-        return;
-    }
-    File root = SD_MMC.open("/");
-    if (!root) return;
+// Recursive scan: walk the SD tree, collect files with audio extensions.
+// Relative paths (without leading '/') are stored so they fit in
+// MAX_FILENAME_LEN; player::play() re-adds the slash when opening.
+// Every entry visited is logged to Serial so we can tell at a glance
+// whether the card is empty, full of unexpected names, or holding
+// files in a subfolder we'd otherwise miss.
+void scanDir(File dir, const char* prefix) {
     File f;
-    while (fileCount < cfg::MAX_FILES && (f = root.openNextFile())) {
-        if (!f.isDirectory() && hasAudioExt(f.name())) {
-            strncpy(fileBuf[fileCount], f.name(), cfg::MAX_FILENAME_LEN - 1);
-            fileBuf[fileCount][cfg::MAX_FILENAME_LEN - 1] = '\0';
-            files[fileCount] = fileBuf[fileCount];
-            ++fileCount;
+    while (fileCount < cfg::MAX_FILES && (f = dir.openNextFile())) {
+        const char* name = f.name();
+        if (f.isDirectory()) {
+            Serial.print(F("  [dir]  "));
+            Serial.println(name);
+            char sub[cfg::MAX_FILENAME_LEN];
+            snprintf(sub, sizeof(sub), "%s%s/",
+                     prefix[0] ? prefix : "", name);
+            scanDir(f, sub);
+        } else {
+            const bool audio = hasAudioExt(name);
+            Serial.print(audio ? F("  [ok ]  ") : F("  [skip] "));
+            Serial.print(prefix);
+            Serial.println(name);
+            if (audio) {
+                char full[cfg::MAX_FILENAME_LEN];
+                snprintf(full, sizeof(full), "%s%s", prefix, name);
+                strncpy(fileBuf[fileCount], full, cfg::MAX_FILENAME_LEN - 1);
+                fileBuf[fileCount][cfg::MAX_FILENAME_LEN - 1] = '\0';
+                files[fileCount] = fileBuf[fileCount];
+                ++fileCount;
+            }
         }
         f.close();
     }
+}
+
+void scanSD() {
+    fileCount = 0;
+    Serial.println(F("\n[sd] mounting..."));
+    if (!SD_MMC.begin("/sdcard", true /* 1-bit mode */)) {
+        Serial.println(F("[sd] mount FAILED — is a card inserted?"));
+        ui::showMessage("SD mount failed");
+        return;
+    }
+    Serial.print(F("[sd] mounted, type="));
+    switch (SD_MMC.cardType()) {
+        case CARD_NONE: Serial.println(F("NONE")); break;
+        case CARD_MMC:  Serial.println(F("MMC"));  break;
+        case CARD_SD:   Serial.println(F("SD"));   break;
+        case CARD_SDHC: Serial.println(F("SDHC")); break;
+        default:        Serial.println(F("UNK"));  break;
+    }
+    Serial.print(F("[sd] size="));
+    Serial.print((uint32_t)(SD_MMC.cardSize() / (1024ULL * 1024ULL)));
+    Serial.println(F(" MiB"));
+
+    File root = SD_MMC.open("/");
+    if (!root) { Serial.println(F("[sd] could not open /")); return; }
+    scanDir(root, "");
     root.close();
+
+    Serial.print(F("[sd] found "));
+    Serial.print(fileCount);
+    Serial.println(F(" audio file(s)"));
 }
 
 // Mirror the OLED UI to Serial so the firmware is usable without a
@@ -86,7 +130,7 @@ void printHelp() {
         "  browser: w/s scroll, enter play\n"
         "  playing: +/- speed, = snap-1.0, K keylock, p pause,\n"
         "           b back, c cue, C set-cue\n"
-        "  global:  t timecode arm, ? help\n"));
+        "  global:  t timecode arm, r rescan SD, ? help\n"));
 }
 
 void redraw() {
@@ -221,6 +265,7 @@ void pollSerial() {
         int c = Serial.read();
         if (c < 0) break;
         if (c == '?') { printHelp(); continue; }
+        if (c == 'r') { scanSD(); selected = 0; redraw(); continue; }
         if (c == 't') {
             bool on = !timecode_in::enabled();
             timecode_in::setEnabled(on);
@@ -252,6 +297,29 @@ void loop() {
     timecode_in::tick();
     driveFromTimecode();
     pollSerial();
+
+    // Return to the browser when the current track hits EOF. player::stop()
+    // fires from loopTick() but only touches audio state, not the screen.
+    if (screen == Screen::Playing && !player::isPlaying()) {
+        screen = Screen::Browser;
+        redraw();
+    }
+
+    // Playback liveness trace: once a second while on the Playing screen,
+    // print the file byte position so we can confirm the copier is draining
+    // bytes even with no speaker attached.
+    static uint32_t lastTraceMs = 0;
+    if (screen == Screen::Playing && player::isPlaying() && !player::isPaused()) {
+        uint32_t now = millis();
+        if (now - lastTraceMs >= 1000) {
+            lastTraceMs = now;
+            Serial.print(F("[play] pos="));
+            Serial.print(player::filePosition());
+            Serial.print(F("  speed="));
+            Serial.print(player::speed(), 2);
+            Serial.println('x');
+        }
+    }
 
     auto e = controls::poll();
     if (e == controls::Event::None) return;

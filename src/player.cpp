@@ -185,4 +185,8 @@ float speed()     { return curSpeed; }
 bool  isPlaying() { return playing;  }
 bool  isPaused()  { return paused;   }
 
+uint32_t filePosition() {
+    return audioFile ? audioFile.position() : 0;
+}
+
 } // namespace player
