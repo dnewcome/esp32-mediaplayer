@@ -149,6 +149,23 @@ Time-domain pitch-preserving stretching. For each output chunk:
 Parameters (44.1 kHz): `FRAME_N = 1024`, `HOP_SYN = 256`, `SEARCH = 128`.
 See `src/wsola.cpp`.
 
+### CPU budget (unmeasured)
+
+Rough estimates on a 240 MHz ESP32, everything running on core 1
+(Arduino's main loop); core 0 is idle since we don't use WiFi/BT.
+
+| Path                  | Est. one-core utilization |
+| --------------------- | ------------------------- |
+| Pitched mode          | ~20–30% (MP3 decode + DMA I²S) |
+| Keylock mode          | ~35–50% (+ WSOLA: AMDF search dominates) |
+| Timecode armed        | small — ZC + LFSR, a few % |
+
+WSOLA's cost is dominated by the AMDF search: `FRAME_N × 2·SEARCH`
+abs-diffs per `HOP_SYN` output samples on a mono-summed input, roughly
+1K ops per output sample. Not measured on hardware yet — wrap a probe
+around `player::loopTick()` with `esp_timer_get_time()` when we want a
+real number.
+
 ### Timecode decoder
 
 Implements Serato Control Vinyl and Serato Control CD decoding — speed,
