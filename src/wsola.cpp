@@ -236,6 +236,11 @@ void WsolaStream::begin(int /*sampleRate*/, int channels) {
     dsp_.begin(channels_);
 }
 
+void WsolaStream::setAudioInfo(AudioInfo info) {
+    AudioStream::setAudioInfo(info);
+    sink_.setAudioInfo(info);
+}
+
 int WsolaStream::availableForWrite() {
     return dsp_.inputCapacity() * channels_ * (int)sizeof(int16_t);
 }

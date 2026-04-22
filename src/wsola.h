@@ -111,6 +111,12 @@ public:
     void setSpeed(float s) { dsp_.setSpeed(s); }
     void reset()           { dsp_.reset(); }
 
+    // The decoder reports its native rate by calling setAudioInfo on this
+    // stream (via EncodedAudioStream's notify chain). WSOLA doesn't change
+    // the rate — pitch is preserved — so forward it straight to the sink
+    // so kit's I2S clock tracks the file's native rate in Keylock mode.
+    void setAudioInfo(AudioInfo info) override;
+
     size_t write(const uint8_t* data, size_t len) override;
     int    availableForWrite() override;
 
