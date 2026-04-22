@@ -128,9 +128,9 @@ void printHelp() {
     Serial.println(F(
         "\nkeys:\n"
         "  browser: w/s scroll, enter play\n"
-        "  playing: +/- speed, = snap-1.0, K keylock, p pause,\n"
-        "           b back, c cue, C set-cue\n"
-        "  global:  t timecode arm, r rescan SD, ? help\n"));
+        "  playing: +/- speed (fine), [/] speed (coarse), = snap-1.0,\n"
+        "           < > hold-to-nudge (-/+2%), p pause, b back, c cue, C set-cue\n"
+        "  global:  K keylock toggle, t timecode arm, r rescan SD, ? help\n"));
 }
 
 void redraw() {
@@ -231,6 +231,38 @@ void setup() {
 
 namespace {
 
+// --- Nudge: hold '>' / '<' to bump playback ±NUDGE_AMOUNT temporarily (DJ
+// beat-matching). We can't see key release over a line-discipline serial
+// terminal, so we rely on the terminal's key-repeat: each repeat refreshes
+// a timeout; when it stops firing we snap back to the pre-nudge speed.
+// ~30 Hz repeat rate means a timeout of ~180 ms catches the gap reliably.
+constexpr uint32_t NUDGE_TIMEOUT_MS = 180;
+constexpr float    NUDGE_AMOUNT     = 0.02f;
+bool     nudging_    = false;
+int      nudgeDir_   = 0;
+float    nudgeBase_  = 1.0f;
+uint32_t nudgeLast_  = 0;
+
+void nudgePress(int dir) {
+    if (!player::isPlaying()) return;
+    if (!nudging_ || dir != nudgeDir_) {
+        nudgeBase_ = player::speed();
+        nudgeDir_  = dir;
+        nudging_   = true;
+    }
+    nudgeLast_ = millis();
+    player::setSpeed(nudgeBase_ + dir * NUDGE_AMOUNT);
+}
+
+void nudgeTick() {
+    if (!nudging_) return;
+    if (millis() - nudgeLast_ < NUDGE_TIMEOUT_MS) return;
+    player::setSpeed(nudgeBase_);
+    nudging_ = false;
+    nudgeDir_ = 0;
+    redraw();
+}
+
 // Map a single char from Serial to a controls::Event in the current
 // screen's vocabulary. Returns Event::None if the char isn't bound.
 controls::Event keyToEvent(int c) {
@@ -246,7 +278,6 @@ controls::Event keyToEvent(int c) {
             case '+':              return controls::Event::EncoderCW;
             case '-':              return controls::Event::EncoderCCW;
             case '=':              return controls::Event::EncoderPress;
-            case 'K':              return controls::Event::EncoderLongPress;
             case 'p': case ' ':    return controls::Event::PlayPress;
             case 'b':              return controls::Event::BackPress;
             case 'c':              return controls::Event::CuePress;
@@ -273,6 +304,25 @@ void pollSerial() {
             Serial.println(on ? F("ON") : F("OFF"));
             continue;
         }
+        if (c == 'K') {
+            // Global keylock toggle. setMode() only stores the choice; the
+            // pipeline rebinds on the next play(). If a track is already
+            // playing, restart it so the new stage takes over immediately.
+            player::setMode(player::mode() == player::Mode::Pitched
+                            ? player::Mode::Keylock
+                            : player::Mode::Pitched);
+            Serial.print(F("keylock: "));
+            Serial.println(player::mode() == player::Mode::Keylock ? F("ON") : F("OFF"));
+            if (screen == Screen::Playing) playSelected();
+            redraw();
+            continue;
+        }
+        if (screen == Screen::Playing) {
+            if (c == ']') { player::setSpeed(player::speed() + 0.1f); redraw(); continue; }
+            if (c == '[') { player::setSpeed(player::speed() - 0.1f); redraw(); continue; }
+            if (c == '>') { nudgePress(+1); continue; }
+            if (c == '<') { nudgePress(-1); continue; }
+        }
         auto e = keyToEvent(c);
         if (e == controls::Event::None) continue;
         if (screen == Screen::Browser) handleBrowser(e);
@@ -297,6 +347,7 @@ void loop() {
     timecode_in::tick();
     driveFromTimecode();
     pollSerial();
+    nudgeTick();
 
     // Return to the browser when the current track hits EOF. player::stop()
     // fires from loopTick() but only touches audio state, not the screen.

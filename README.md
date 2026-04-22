@@ -104,7 +104,8 @@ UI to the 115200-baud serial console and accepts single-char keys.
 | --- | --- | --- |
 | Browser | `w` / `s` | Scroll up / down |
 | Browser | Enter | Play selected |
-| Playing | `+` / `-` | Nudge speed |
+| Playing | `+` / `-` | Nudge speed ±0.02× |
+| Playing | `[` / `]` | Nudge speed ±0.10× (coarse) |
 | Playing | `=` | Snap speed to 1.0× |
 | Playing | `K` | Toggle keylock / pitched |
 | Playing | `p` or space | Pause / resume |
