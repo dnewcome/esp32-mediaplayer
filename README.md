@@ -210,6 +210,7 @@ Produces four binaries:
 | `timecode_test` | Synthetic stereo-carrier smoke test — exercises ZC, direction, and period estimation across 500/1000/1500/2000 Hz. |
 | `timecode_analyze <file.wav> [hop_ms]` | Stream mode: print speed/locked/position time series. |
 | `timecode_analyze <file.wav> seek <off_s> [dur_s]` | Seek mode: decode a window, compare decoded position to ground-truth cycle offset. |
+| `vinyl_demo <tc.wav> <music.wav> <tc_speed>` | End-to-end loop: resamples TC at `tc_speed` (simulating platter spin), decodes it, drives WSOLA on the music — music plays keylocked at the decoded speed. Stereo PCM to stdout. |
 
 The same `src/wsola.cpp` and `src/timecode.cpp` that ship to the ESP32
 are compiled here — only Arduino and AudioTools includes are guarded
@@ -243,6 +244,7 @@ Common run targets (all under `make -C native`):
 | `run_play WAV=x.wav SPEED=1.25` | Pipe `wsola_play` output to `aplay` |
 | `run_tc` | Run the synthetic-carrier timecode smoke test |
 | `run_tc_wav TC_WAV=path.wav` | Stream a real capture through `timecode_analyze` |
+| `run_vinyl_demo DEMO_SPEED=1.25 MUSIC=path.wav` | TC drives music playback (keylocked) via WSOLA — piped to aplay |
 
 ## References / inspiration
 

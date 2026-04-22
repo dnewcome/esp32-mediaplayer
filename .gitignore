@@ -18,6 +18,7 @@ native/wsola_play
 native/mediaplayer
 native/timecode_test
 native/timecode_analyze
+native/vinyl_demo
 
 # Local test captures (large; not for the repo)
 *.wav

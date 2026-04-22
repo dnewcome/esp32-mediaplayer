@@ -13,6 +13,8 @@
 #   make run_play  WAV=foo.wav SPEED=1.25
 #   make run_tc                      # synthetic timecode test
 #   make run_tc_wav TC_WAV=path.wav  # decode a real timecode capture
+#   make run_vinyl_demo DEMO_SPEED=1.25 MUSIC=path.wav
+#                                    # end-to-end: TC drives WSOLA on music
 
 CXX      ?= g++
 CXXFLAGS ?= -O2 -Wall -Wextra -std=c++17 -DWSOLA_NATIVE -DTIMECODE_NATIVE -I../src
@@ -30,13 +32,17 @@ SPEED ?= 1.0
 TC_WAV ?= ../timecode.wav
 TC_HOP ?= 250
 
+# vinyl_demo inputs. Override MUSIC=/path/to/song.wav as needed.
+MUSIC    ?= media/bass.wav
+DEMO_SPEED ?= 1.25
+
 # Wokwi sim lives at the project root; these paths are relative to ../.
 WOKWI_ENV      ?= esp32-sim
 WOKWI_ELF      ?= .pio/build/$(WOKWI_ENV)/firmware.elf
 WOKWI_SCENARIO ?= sim/scenario.test.yaml
 WOKWI_PROJECT  ?= sim/
 
-all: wsola_play mediaplayer timecode_test timecode_analyze
+all: wsola_play mediaplayer timecode_test timecode_analyze vinyl_demo
 
 wsola_play: wsola_play.cpp $(WSOLA_SRC)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
@@ -48,6 +54,9 @@ timecode_test: timecode_test.cpp $(TIMECODE_SRC)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 timecode_analyze: timecode_analyze.cpp $(TIMECODE_SRC)
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+
+vinyl_demo: vinyl_demo.cpp $(TIMECODE_SRC) $(WSOLA_SRC)
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 run_sim: mediaplayer
@@ -79,7 +88,12 @@ run_tc: timecode_test
 run_tc_wav: timecode_analyze
 	./timecode_analyze $(TC_WAV) $(TC_HOP)
 
-clean:
-	rm -f wsola_play mediaplayer timecode_test timecode_analyze
+# End-to-end vinyl-control demo: TC WAV → decoder → WSOLA on music → aplay.
+# Override: make run_vinyl_demo DEMO_SPEED=0.8 MUSIC=path/to/song.wav
+run_vinyl_demo: vinyl_demo
+	./vinyl_demo $(TC_WAV) $(MUSIC) $(DEMO_SPEED) | aplay -q -f S16_LE -c 2 -r 44100
 
-.PHONY: all run run_sim run_wokwi sim_firmware run_play run_tc run_tc_wav clean
+clean:
+	rm -f wsola_play mediaplayer timecode_test timecode_analyze vinyl_demo
+
+.PHONY: all run run_sim run_wokwi sim_firmware run_play run_tc run_tc_wav run_vinyl_demo clean
