@@ -94,6 +94,26 @@ boots — re-flash with the other env.
 | Playing | Cue short-press | Jump to cue point (or restart if no cue) |
 | Playing | Cue long-press | Set cue point at current position |
 
+### Serial interface
+
+For bringing up an A1S without an OLED wired: the firmware mirrors the
+UI to the 115200-baud serial console and accepts single-char keys.
+`pio device monitor -b 115200`, then:
+
+| Screen | Key | Action |
+| --- | --- | --- |
+| Browser | `w` / `s` | Scroll up / down |
+| Browser | Enter | Play selected |
+| Playing | `+` / `-` | Nudge speed |
+| Playing | `=` | Snap speed to 1.0× |
+| Playing | `K` | Toggle keylock / pitched |
+| Playing | `p` or space | Pause / resume |
+| Playing | `b` | Back to browser |
+| Playing | `c` | Jump to cue |
+| Playing | `C` | Set cue at current position |
+| Any | `t` | Arm / disarm timecode input |
+| Any | `?` | Print key help |
+
 ## How it works
 
 ### Audio pipeline

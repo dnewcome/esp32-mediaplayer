@@ -45,6 +45,50 @@ void scanSD() {
     root.close();
 }
 
+// Mirror the OLED UI to Serial so the firmware is usable without a
+// display. Printed on every state change; a short `?` prints the key
+// cheatsheet on demand.
+void printSerialUI() {
+    Serial.println();
+    if (screen == Screen::Browser) {
+        Serial.print(F("== Browser ==  "));
+        Serial.print(fileCount == 0 ? 0 : selected + 1);
+        Serial.print('/');
+        Serial.println(fileCount);
+        if (fileCount == 0) { Serial.println(F("  (no audio files)")); return; }
+        int start = selected - 2; if (start < 0) start = 0;
+        int end   = start + 5;    if (end > fileCount) end = fileCount;
+        for (int i = start; i < end; ++i) {
+            Serial.print(i == selected ? F(" > ") : F("   "));
+            Serial.println(files[i]);
+        }
+    } else {
+        Serial.print(F("== Playing ==  "));
+        Serial.println(files[selected]);
+        Serial.print(F("  speed="));  Serial.print(player::speed(), 2);
+        Serial.print(F("x  mode=")); Serial.print(
+            player::mode() == player::Mode::Keylock ? F("keylock") : F("pitched"));
+        Serial.print(F("  "));        Serial.print(
+            player::isPaused() ? F("PAUSED") : F("PLAYING"));
+        Serial.print(F("  cue="));    Serial.print(player::hasCue() ? F("yes") : F("no"));
+        Serial.print(F("  tc="));
+        if (!timecode_in::enabled())     Serial.println(F("off"));
+        else if (timecode_in::locked())  { Serial.print(F("locked@"));
+                                           Serial.print(timecode_in::speed(), 2);
+                                           Serial.println('x'); }
+        else                              Serial.println(F("searching"));
+    }
+}
+
+void printHelp() {
+    Serial.println(F(
+        "\nkeys:\n"
+        "  browser: w/s scroll, enter play\n"
+        "  playing: +/- speed, = snap-1.0, K keylock, p pause,\n"
+        "           b back, c cue, C set-cue\n"
+        "  global:  t timecode arm, ? help\n"));
+}
+
 void redraw() {
     if (screen == Screen::Browser) {
         if (fileCount == 0) ui::showMessage("No audio files");
@@ -54,6 +98,7 @@ void redraw() {
                            player::mode() == player::Mode::Keylock,
                            player::hasCue());
     }
+    printSerialUI();
 }
 
 void playSelected() {
@@ -136,23 +181,58 @@ void setup() {
     player::begin();
     timecode_in::begin();
     scanSD();
+    printHelp();
     redraw();
 }
 
 namespace {
 
-// Drain serial for dev-time toggles. Currently just 't' → arm/disarm
-// the timecode input. Kept in main.cpp rather than controls.cpp because
-// this is a debug hook, not a user-facing control.
+// Map a single char from Serial to a controls::Event in the current
+// screen's vocabulary. Returns Event::None if the char isn't bound.
+controls::Event keyToEvent(int c) {
+    if (screen == Screen::Browser) {
+        switch (c) {
+            case 'w': case 'k':    return controls::Event::EncoderCCW;
+            case 's': case 'j':    return controls::Event::EncoderCW;
+            case '\r': case '\n':  return controls::Event::EncoderPress;
+            default: break;
+        }
+    } else {
+        switch (c) {
+            case '+':              return controls::Event::EncoderCW;
+            case '-':              return controls::Event::EncoderCCW;
+            case '=':              return controls::Event::EncoderPress;
+            case 'K':              return controls::Event::EncoderLongPress;
+            case 'p': case ' ':    return controls::Event::PlayPress;
+            case 'b':              return controls::Event::BackPress;
+            case 'c':              return controls::Event::CuePress;
+            case 'C':              return controls::Event::CueLongPress;
+            default: break;
+        }
+    }
+    return controls::Event::None;
+}
+
+// Drain serial. Single-char keybindings mirror the OLED controls, plus
+// a couple of dev toggles ('t' timecode, '?' help) that don't have a
+// physical-button equivalent yet.
 void pollSerial() {
     while (Serial.available() > 0) {
         int c = Serial.read();
+        if (c < 0) break;
+        if (c == '?') { printHelp(); continue; }
         if (c == 't') {
             bool on = !timecode_in::enabled();
             timecode_in::setEnabled(on);
-            Serial.print("timecode_in: ");
-            Serial.println(on ? "ON" : "OFF");
+            Serial.print(F("timecode_in: "));
+            Serial.println(on ? F("ON") : F("OFF"));
+            continue;
         }
+        auto e = keyToEvent(c);
+        if (e == controls::Event::None) continue;
+        if (screen == Screen::Browser) handleBrowser(e);
+        else                           handlePlaying(e);
+        redraw();
     }
 }
 
