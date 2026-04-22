@@ -10,6 +10,19 @@ namespace {
 // Wire for the codec; U8g2 reuses it via HW_I2C + U8X8_PIN_NONE clocks.
 U8G2_SSD1306_128X64_NONAME_F_HW_I2C oled(U8G2_R0, U8X8_PIN_NONE);
 
+// Runtime OLED detect: probe 0x3C once at begin(). If the chip doesn't
+// ACK (e.g. breadboard A1S with nothing wired to the J1/J2 I2C pins),
+// every draw call would otherwise generate i2c_master_transmit errors
+// at the log level set for CORE_DEBUG. We skip drawing entirely and
+// fall back to the Serial UI.
+constexpr uint8_t  OLED_ADDR = 0x3C;
+bool               oledPresent = false;
+
+bool probeI2C(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return Wire.endTransmission() == 0;
+}
+
 constexpr int LINE_H  = 10;
 constexpr int VISIBLE = 5;
 
@@ -22,6 +35,16 @@ void drawHeader(const char* label) {
 } // namespace
 
 void begin() {
+    // U8g2's hardware-I2C path expects Wire already set up with the
+    // right pins. Bring it up on the codec bus ourselves, then probe
+    // before touching U8g2 so we don't spam the log if the OLED is
+    // absent.
+    Wire.begin(/*SDA*/33, /*SCL*/32);
+    oledPresent = probeI2C(OLED_ADDR);
+    Serial.print(F("[ui] SSD1306 @ 0x3C: "));
+    Serial.println(oledPresent ? F("present") : F("absent (serial UI only)"));
+    if (!oledPresent) return;
+
     oled.begin();
     oled.setFont(u8g2_font_6x10_tf);
     oled.clearBuffer();
@@ -31,6 +54,7 @@ void begin() {
 }
 
 void showBrowser(const char* const* filenames, int count, int selected) {
+    if (!oledPresent) return;
     oled.clearBuffer();
     drawHeader("Files");
 
@@ -56,6 +80,7 @@ void showBrowser(const char* const* filenames, int count, int selected) {
 
 void showNowPlaying(const char* filename, float speed, bool paused,
                     bool keylock, bool cueSet) {
+    if (!oledPresent) return;
     oled.clearBuffer();
     drawHeader(paused ? "Paused" : "Playing");
 
@@ -87,6 +112,7 @@ void showNowPlaying(const char* filename, float speed, bool paused,
 }
 
 void showMessage(const char* msg) {
+    if (!oledPresent) return;
     oled.clearBuffer();
     oled.setFont(u8g2_font_6x10_tf);
     oled.drawStr(0, 32, msg);
