@@ -220,18 +220,29 @@ out. One source of truth for DSP correctness.
 `sim/diagram.json` + `sim/wokwi.toml` + `sim/scenario.test.yaml` drive
 the Wokwi CLI against the `esp32-sim` PlatformIO environment
 (`src/main_sim.cpp` replaces `main.cpp`, strips audio deps, keeps UI +
-controls). Serial assertions verify the state machine:
+controls). Serial assertions verify the state machine.
 
 ```
-pio run -e esp32-sim
-wokwi-cli --elf .pio/build/esp32-sim/firmware.elf \
-          --scenario sim/scenario.test.yaml sim/
+make -C native run_wokwi    # builds esp32-sim firmware and runs scenario
 ```
+
+Needs `WOKWI_CLI_TOKEN` in `./.env` (gitignored); the target bails with
+a clear error if it's missing.
 
 This validates the non-audio half of the firmware (OLED rendering,
 encoder/button handling, state transitions). Wokwi does **not**
 simulate the ESP32 I²S peripheral — `mediaplayer` in `native/` is where
 audio behaviour is exercised.
+
+Common run targets (all under `make -C native`):
+
+| Target | What it does |
+| --- | --- |
+| `run_sim` | Launch the SDL mediaplayer against `native/media/` |
+| `run_wokwi` | Build esp32-sim firmware and run the Wokwi scenario |
+| `run_play WAV=x.wav SPEED=1.25` | Pipe `wsola_play` output to `aplay` |
+| `run_tc` | Run the synthetic-carrier timecode smoke test |
+| `run_tc_wav TC_WAV=path.wav` | Stream a real capture through `timecode_analyze` |
 
 ## References / inspiration
 
