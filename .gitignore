@@ -11,3 +11,13 @@ build/
 *.o
 *.a
 .DS_Store
+.env
+
+# Host-side artifacts
+native/wsola_play
+native/mediaplayer
+native/timecode_test
+native/timecode_analyze
+
+# Local test captures (large; not for the repo)
+*.wav

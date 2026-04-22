@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "author": "esp32-mediaplayer sim",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled", "top": -96, "left": 150, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-ky-040", "id": "enc", "top": 40, "left": 320, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btn-play", "top": 200, "left": 320, "attrs": { "color": "green", "label": "PLAY" } },
+    { "type": "wokwi-pushbutton", "id": "btn-back", "top": 260, "left": 320, "attrs": { "color": "red",   "label": "BACK" } },
+    { "type": "wokwi-pushbutton", "id": "btn-cue",  "top": 320, "left": 320, "attrs": { "color": "blue",  "label": "CUE"  } }
+  ],
+  "connections": [
+    [ "esp:TX",  "$serialMonitor:RX", "",    [] ],
+    [ "esp:RX",  "$serialMonitor:TX", "",    [] ],
+
+    [ "oled:GND", "esp:GND.1", "black", [] ],
+    [ "oled:VCC", "esp:3V3",   "red",   [] ],
+    [ "oled:SCL", "esp:32",    "gold",  [] ],
+    [ "oled:SDA", "esp:33",    "gold",  [] ],
+
+    [ "enc:GND", "esp:GND.2", "black", [] ],
+    [ "enc:VCC", "esp:3V3",   "red",   [] ],
+    [ "enc:CLK", "esp:19",    "green", [] ],
+    [ "enc:DT",  "esp:23",    "green", [] ],
+    [ "enc:SW",  "esp:18",    "green", [] ],
+
+    [ "btn-play:1.l", "esp:5",     "green", [] ],
+    [ "btn-play:2.l", "esp:GND.3", "black", [] ],
+    [ "btn-back:1.l", "esp:21",    "green", [] ],
+    [ "btn-back:2.l", "esp:GND.3", "black", [] ],
+    [ "btn-cue:1.l",  "esp:22",    "green", [] ],
+    [ "btn-cue:2.l",  "esp:GND.3", "black", [] ]
+  ]
+}

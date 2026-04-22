@@ -1,0 +1,18 @@
+name: browser-navigation
+version: 1
+author: esp32-mediaplayer
+
+# Smoke test: boot → press PLAY → confirm we transitioned to the now-playing
+# screen for the first file. Assertions are against serial traces emitted by
+# main_sim.cpp. Encoder rotation is TODO — the wokwi-ky-040 control name needs
+# to be verified before we can script scrolling.
+
+steps:
+  - wait-serial: 'SIM: ready'
+  - wait-serial: 'SIM: browser selected=0 name=track01.mp3'
+
+  # Press PLAY — short press (press, small delay, release).
+  - set-control: { part-id: btn-play, control: pressed, value: 1 }
+  - delay: 50ms
+  - set-control: { part-id: btn-play, control: pressed, value: 0 }
+  - wait-serial: 'SIM: playing name=track01.mp3'

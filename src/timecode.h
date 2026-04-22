@@ -1,96 +1,109 @@
 #pragma once
-#include <Arduino.h>
 #include <stdint.h>
+#include <stddef.h>
 
-// Timecode vinyl decoder (Serato Control Vinyl / CD).
+#ifndef TIMECODE_NATIVE
+#include <Arduino.h>
+#endif
+
+// Timecode vinyl/CD decoder (Serato Control Vinyl / Control CD).
 //
-// High-level design (closely mirrors xwax, https://xwax.org/):
+// Clean-room implementation of the xwax (http://xwax.org/) algorithm —
+// xwax is GPL-3, so the code here is not copied; only the published
+// timecode format constants (reverse-engineered facts about Serato's
+// products) are used as data.
 //
-//     stereo audio in ──► zero-crossing detector ──► speed estimator
-//                              │                        │
-//                              ▼                        ▼
-//                        direction (L/R phase)    position estimator
-//                              │                        │
-//                              ▼                        ▼
-//                         bit extractor ──► PLL ──► timecode lookup ──► position
+// Pipeline:
 //
-// The carrier is ~1 kHz with 90° L/R phase quadrature — zero crossings give
-// speed (period between crossings) and direction (which channel leads). An
-// NRZI bit stream is amplitude-modulated on top, and a lookup table
-// decodes the absolute position within the track.
+//   int16 stereo in ──► per-channel ZC + DC-tracking + hysteresis
+//                       │                                  │
+//                       ▼                                  ▼
+//                 direction (primary vs              period → speed
+//                  secondary polarity at ZC)
+//                       │                                  │
+//                       ▼                                  │
+//             bit sample at secondary ZC                   │
+//             (loud vs quiet → 1 vs 0)                     │
+//                       │                                  │
+//                       ▼                                  │
+//             LFSR predictor + valid_counter               │
+//                       │                                  │
+//                       ▼                                  │
+//             LUT lookup ► absolute cycle position ◄───────┘
 //
-// THIS FILE IS A SKELETON:
-//   - Zero-crossing + speed estimation: implemented (validatable with a
-//     synthetic sine-sweep on a host build).
-//   - Direction detection: implemented (quadrature sign).
-//   - Bit extraction + position lookup: NOT IMPLEMENTED. Requires Serato's
-//     specific code table, which is reverse-engineered and best adopted from
-//     xwax's tables once we can test against real audio. Left as TODO.
-//
-// Outputs are intended to drive the player:
-//   - speed()     → player::setSpeed()
-//   - position()  → player seeks to corresponding file offset (once available)
-//   - locked()    → only act on position/speed when true
+// On host builds (TIMECODE_NATIVE) the LUT is a std::unordered_map built
+// lazily on first decode. On ESP32 the LUT is currently unavailable —
+// position() returns -1; speed() and direction still work. A PSRAM-
+// resident compact LUT is future work.
 
 namespace timecode {
 
-// Supported formats; add more as decoders are written.
 enum class Format : uint8_t {
-    SeratoControlVinyl,   // default for this project
+    SeratoControlVinyl,
     SeratoControlCD,
 };
 
 class Decoder {
 public:
-    void  begin(int sampleRate, Format fmt = Format::SeratoControlVinyl);
-    void  reset();
+    void begin(int sampleRate, Format fmt = Format::SeratoControlCD);
+    void reset();
 
-    // Feed interleaved stereo int16 samples from the codec's ADC.
-    void  pushFrames(const int16_t* stereo, int frames);
+    void pushFrames(const int16_t* stereo, int frames);
 
-    // Most recent speed estimate. Sign encodes direction:
-    //   +1.0 = forward at reference pitch
-    //    0.0 = stopped
-    //   -1.0 = reverse at reference pitch
-    // Magnitude tracks the ratio of measured carrier period to the reference
-    // period (33⅓ RPM). No smoothing yet — caller may low-pass if needed.
-    float speed() const { return speed_; }
+    // Sign = direction, magnitude = period ratio vs reference.
+    float    speed() const    { return speed_; }
 
-    // Absolute sample position within the track, or -1 if not yet locked.
-    // (Bit-decode stage not implemented — always returns -1 for now.)
-    int32_t position() const { return position_; }
+    // Cycle-indexed absolute position on the timecode, or -1 until we've
+    // seen VALID_BITS consecutive predicted bits. Convert to wall time
+    // with position() / resolutionHz().
+    int32_t  position() const { return position_; }
 
-    bool locked() const { return locked_; }
+    bool     locked() const   { return locked_; }
+
+    int      resolutionHz() const { return resolution_; }
 
 private:
-    int      sampleRate_ = 44100;
-    Format   fmt_        = Format::SeratoControlVinyl;
-
-    // Zero-crossing tracking (per channel).
-    struct ZCState {
-        int16_t  lastSample  = 0;
-        uint32_t samplesSinceZC = 0;
-        uint32_t lastPeriod  = 0;   // samples between consecutive same-sign crossings
-        bool     hadFirst    = false;
+    struct Channel {
+        bool     positive       = false;
+        bool     swapped        = false;  // crossed this sample
+        int32_t  zero           = 0;      // EMA-tracked DC offset
+        uint32_t crossingTicker = 0;      // samples since last ZC
     };
-    ZCState zcL_, zcR_;
 
-    // Phase relationship sample: +1 if L leads R, -1 if R leads L.
-    int8_t   dirSign_ = +1;
-    uint32_t samplesSinceLastDirCheck_ = 0;
+    int      sampleRate_ = 44100;
+    Format   fmt_        = Format::SeratoControlCD;
 
-    // Outputs.
+    // Format-derived constants (filled by begin()).
+    uint32_t bits_       = 20;
+    uint32_t taps_       = 0;
+    uint32_t seed_       = 0;
+    uint32_t defLength_  = 0;
+    uint32_t safe_       = 0;
+    uint32_t flags_      = 0;
+    int      resolution_ = 1000;
+
+    float    zeroAlpha_       = 0.0f;
+    int32_t  threshold_       = 0;
+    float    refPeriodSamples_ = 44.1f;
+
+    Channel  primary_, secondary_;
+
+    uint32_t samplesSincePrimaryZC_ = 0;
+    bool     forwards_ = true;
+
+    int32_t  refLevel_       = 0;
+    uint32_t bitstream_      = 0;
+    uint32_t expected_       = 0;
+    uint32_t validCounter_   = 0;
+    uint32_t timecodeTicker_ = 0;
+
     float    speed_    = 0.0f;
     int32_t  position_ = -1;
     bool     locked_   = false;
 
-    // Reference carrier period at speed 1.0 (samples).
-    // Serato Control Vinyl carrier ≈ 1000 Hz → 44.1 samples @ 44.1 kHz.
-    float    refPeriodSamples_ = 44.1f;
-
-    void processSample(int16_t l, int16_t r);
-    void updateSpeedFromPeriod(uint32_t period);
-    void updateDirection(int16_t l, int16_t r);
+    void processSample(int32_t primary, int32_t secondary);
+    void processBitstream(int32_t mag);
+    static void updateChannel(Channel& ch, int32_t v, float alpha, int32_t thr);
 };
 
 } // namespace timecode

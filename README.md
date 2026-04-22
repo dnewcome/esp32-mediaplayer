@@ -20,12 +20,12 @@ Scaffold-complete. Untested on hardware — awaiting a board.
 | SSD1306 OLED browser + now-playing UI | Done |
 | Rotary encoder + 3 buttons, long-press state machine | Done |
 | Pitched variable speed (resampler) | Done |
-| Keylock variable speed (WSOLA) | Implemented, unverified |
+| Keylock variable speed (WSOLA) | Done (host-validated via SDL player) |
 | Cue points (byte-level seek) | Done (glitches on MP3 mid-frame) |
-| Timecode zero-crossing + speed/direction | Done |
-| Timecode bit decode + position lookup | TODO (needs real vinyl samples) |
+| Timecode: speed + direction | Done (validated on Serato CD) |
+| Timecode: bit decode + absolute position | Done host-side; ESP32 LUT pending |
 | Codec RX (line-in) path for timecode input | TODO |
-| Host-side DSP test harness for WSOLA | TODO |
+| Host simulation (SDL GUI + DSP harnesses) | Done |
 
 ## Hardware
 
@@ -130,11 +130,108 @@ See `src/wsola.cpp`.
 
 ### Timecode decoder
 
-Skeleton only — see `src/timecode.{h,cpp}`. Tracks zero crossings to
-estimate carrier period (→ speed) and L/R phase relationship
-(→ direction). Bit extraction and Serato-specific code table lookup are
-left as a TODO; plan is to port the reverse-engineered tables from
-[xwax](https://xwax.org/) once hardware is available to validate against.
+Implements Serato Control Vinyl and Serato Control CD decoding — speed,
+direction, and absolute position on the record/CD. Source:
+`src/timecode.{h,cpp}`.
+
+```
+int16 stereo in ─► per-channel ZC with hysteresis + DC-tracking zero
+                   │                              │
+                   ▼                              ▼
+           direction (primary vs          period between primary ZCs
+            secondary polarity at ZC)     → carrier speed (EMA-smoothed)
+                   │                              │
+                   ▼                              │
+         bit sample at secondary ZC               │
+         (|primary| vs running ref_level → 1/0)   │
+                   │                              │
+                   ▼                              │
+         20-bit shift register + LFSR predictor   │
+         (VALID_BITS = 24 consecutive matches     │
+          before position is trusted)             │
+                   │                              │
+                   ▼                              │
+         LUT lookup ► absolute cycle position ◄───┘
+```
+
+**Supported formats** (constants are published reverse-engineered facts
+about Serato's commercial products):
+
+| Format | Carrier | Bits | Seed | Taps | Length |
+| --- | --- | --- | --- | --- | --- |
+| Serato Control Vinyl 2nd ed. | 1 kHz | 20 | `0x59017` | `0x361e4` | 712 000 cycles |
+| Serato Control CD | 1 kHz | 20 | `0xd8b40` | `0x34d54` | 950 000 cycles |
+
+Resolution is one decoded cycle per millisecond of reference playback
+(1 kHz carrier). With `VALID_BITS = 24`, lock takes ~25 ms of correct
+bits plus ref-level EMA settling — measured at ~160 ms cold-start on a
+clean capture.
+
+**Host validation.** A reference 980 s capture of the Serato CD in the
+repo (`timecode.wav`, not committed — supply your own) is decoded by
+`native/timecode_analyze`; seek-offset positions decode linearly across
+the usable range of the disc with perfect inter-sample consistency. A
+constant LFSR-to-disc offset (≈2604 cycles for this pressing) is
+absorbed when the player anchors position at playback start.
+
+**ESP32 caveat.** The position LUT is host-only today —
+`std::unordered_map` with ~30 MB footprint for `serato_cd`. The ESP32
+path returns `position() = -1` while still producing correct speed and
+direction. A PSRAM-resident compact LUT is the remaining work to ship
+position decode on hardware.
+
+**Licensing.** This is a clean-room implementation of the algorithm
+described by [xwax](https://xwax.org/) — no xwax source was copied.
+xwax is GPL-3; its code cannot be merged into this project without
+relicensing. The format constants above are facts about Serato's
+products, not copyrightable expression, and appear in multiple
+independent open-source DVS implementations.
+
+## Host simulation and testing
+
+The firmware is structured so the DSP modules (`src/wsola.{h,cpp}` and
+`src/timecode.{h,cpp}`) build cleanly against a host toolchain via
+`-DWSOLA_NATIVE -DTIMECODE_NATIVE`, letting us validate them without
+hardware. Host artifacts live under `native/` (SDL + gcc) and `sim/`
+(Wokwi headless simulation).
+
+### native/ — gcc + SDL harnesses
+
+```
+make -C native            # builds everything
+```
+
+Produces four binaries:
+
+| Binary | Purpose |
+| --- | --- |
+| `wsola_play <file.wav> [speed]` | Feed a WAV through `Wsola`, emit raw PCM to stdout. Pipe to `aplay -f S16_LE -c 2 -r 44100`. |
+| `mediaplayer ./media` | SDL 640×360 window reproducing the ESP32 UI (browser + playing screen) against a real WAV directory. Keyboard stands in for encoder/buttons. |
+| `timecode_test` | Synthetic stereo-carrier smoke test — exercises ZC, direction, and period estimation across 500/1000/1500/2000 Hz. |
+| `timecode_analyze <file.wav> [hop_ms]` | Stream mode: print speed/locked/position time series. |
+| `timecode_analyze <file.wav> seek <off_s> [dur_s]` | Seek mode: decode a window, compare decoded position to ground-truth cycle offset. |
+
+The same `src/wsola.cpp` and `src/timecode.cpp` that ship to the ESP32
+are compiled here — only Arduino and AudioTools includes are guarded
+out. One source of truth for DSP correctness.
+
+### sim/ — Wokwi headless simulation
+
+`sim/diagram.json` + `sim/wokwi.toml` + `sim/scenario.test.yaml` drive
+the Wokwi CLI against the `esp32-sim` PlatformIO environment
+(`src/main_sim.cpp` replaces `main.cpp`, strips audio deps, keeps UI +
+controls). Serial assertions verify the state machine:
+
+```
+pio run -e esp32-sim
+wokwi-cli --elf .pio/build/esp32-sim/firmware.elf \
+          --scenario sim/scenario.test.yaml sim/
+```
+
+This validates the non-audio half of the firmware (OLED rendering,
+encoder/button handling, state transitions). Wokwi does **not**
+simulate the ESP32 I²S peripheral — `mediaplayer` in `native/` is where
+audio behaviour is exercised.
 
 ## References / inspiration
 
@@ -143,9 +240,10 @@ left as a TODO; plan is to port the reverse-engineered tables from
   [`player-sd-audiokit`](https://github.com/pschatzmann/arduino-audio-tools/tree/main/examples/examples-player/player-sd-audiokit) example.
 - [bbulkow/loudframe](https://github.com/bbulkow/loudframe) — reference for
   SD playback and variable-speed handling on the A1S.
-- [xwax](https://xwax.org/) — reverse-engineered timecode decoding for
-  Serato Control Vinyl (and other formats) that the eventual timecode
-  implementation will draw on.
+- [xwax](https://xwax.org/) — algorithmic reference for the timecode
+  decoder. Our implementation is a clean-room rewrite (GPL-3 xwax code
+  is not included); the Serato format constants are reverse-engineered
+  facts originally published there.
 - Verhelst & Roelands, "An Overlap-Add Technique Based on Waveform
   Similarity (WSOLA) For High Quality Time-Scale Modification of Speech",
   ICASSP 1993.

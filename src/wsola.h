@@ -1,8 +1,10 @@
 #pragma once
-#include <Arduino.h>
 #include <stdint.h>
 
+#ifndef WSOLA_NATIVE
+#include <Arduino.h>
 #include "AudioTools.h"
+#endif
 
 // Waveform-Similarity Overlap-Add time stretching.
 //
@@ -100,6 +102,7 @@ private:
 // sink (the I2S/codec stream).
 // ---------------------------------------------------------------------------
 
+#ifndef WSOLA_NATIVE
 class WsolaStream : public AudioStream {
 public:
     explicit WsolaStream(AudioStream& sink) : sink_(sink) {}
@@ -125,5 +128,6 @@ private:
 
     void drainToSink();
 };
+#endif // WSOLA_NATIVE
 
 } // namespace wsola

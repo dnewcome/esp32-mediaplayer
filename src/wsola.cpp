@@ -226,6 +226,7 @@ void Wsola::produceFrame() {
     }
 }
 
+#ifndef WSOLA_NATIVE
 // ===========================================================================
 // WsolaStream — arduino-audio-tools AudioStream adapter
 // ===========================================================================
@@ -256,5 +257,6 @@ void WsolaStream::drainToSink() {
         sink_.write(reinterpret_cast<const uint8_t*>(pullBuf_), (size_t)(n * bytesPerFrame));
     }
 }
+#endif // WSOLA_NATIVE
 
 } // namespace wsola
