@@ -5,6 +5,7 @@
 #include "controls.h"
 #include "ui.h"
 #include "player.h"
+#include "timecode_in.h"
 
 namespace {
 
@@ -133,12 +134,44 @@ void setup() {
     controls::begin();
     ui::begin();
     player::begin();
+    timecode_in::begin();
     scanSD();
     redraw();
 }
 
+namespace {
+
+// Drain serial for dev-time toggles. Currently just 't' → arm/disarm
+// the timecode input. Kept in main.cpp rather than controls.cpp because
+// this is a debug hook, not a user-facing control.
+void pollSerial() {
+    while (Serial.available() > 0) {
+        int c = Serial.read();
+        if (c == 't') {
+            bool on = !timecode_in::enabled();
+            timecode_in::setEnabled(on);
+            Serial.print("timecode_in: ");
+            Serial.println(on ? "ON" : "OFF");
+        }
+    }
+}
+
+// When timecode lock is held, drive player speed from the vinyl. Only
+// applies during playback; if the deck isn't playing there's nothing
+// to steer. Speed is clamped by player::setSpeed().
+void driveFromTimecode() {
+    if (!timecode_in::enabled() || !timecode_in::locked()) return;
+    if (!player::isPlaying()) return;
+    player::setSpeed(timecode_in::speed());
+}
+
+} // namespace
+
 void loop() {
     player::loopTick();
+    timecode_in::tick();
+    driveFromTimecode();
+    pollSerial();
 
     auto e = controls::poll();
     if (e == controls::Event::None) return;

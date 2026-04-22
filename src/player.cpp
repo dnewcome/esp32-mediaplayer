@@ -1,13 +1,15 @@
 #include "player.h"
+#include "codec.h"
 #include "config.h"
 #include "wsola.h"
+
+#include <SD_MMC.h>
 
 // arduino-audio-tools — APIs can shift between versions. The include paths
 // below target the current layout (as of the pschatzmann/arduino-audio-tools
 // main branch). If these paths break after a lib update, check the examples
 // under arduino-audio-tools/examples/examples-player/ for the current names.
 #include "AudioTools.h"
-#include "AudioTools/AudioLibs/AudioBoardStream.h"
 #include "AudioTools/AudioCodecs/CodecMP3Helix.h"
 #include "AudioTools/AudioCodecs/CodecWAV.h"
 
@@ -15,12 +17,9 @@ namespace player {
 
 namespace {
 
-// Codec variant selected via build flag (see platformio.ini).
-#if defined(MEDIAPLAYER_CODEC_AC101)
-  AudioBoardStream kit(AudioKitAC101);
-#else
-  AudioBoardStream kit(AudioKitEs8388V1);
-#endif
+// The AudioBoardStream lives in `codec` — shared with timecode_in so the
+// RX path can capture line-in simultaneously.
+inline AudioBoardStream& kit() { return codec::kit(); }
 
 MP3DecoderHelix mp3;
 WAVDecoder      wav;
@@ -36,8 +35,8 @@ WAVDecoder      wav;
 // For Phase 1 both are wired in parallel; which one drives the codec is chosen
 // by setMode(). Whichever is inactive is bypassed (its output isn't consumed).
 
-ResampleStream resampler(kit);
-wsola::WsolaStream wsolaStage(kit);   // audio-tools AudioStream wrapper (see wsola.h)
+ResampleStream resampler(kit());
+wsola::WsolaStream wsolaStage(kit());   // audio-tools AudioStream wrapper (see wsola.h)
 
 // Two encoded streams; we point the copier at whichever matches the file type.
 EncodedAudioStream mp3ToResample(&resampler, &mp3);
@@ -89,11 +88,13 @@ void applySpeedToActiveStage() {
 } // namespace
 
 void begin() {
-    auto cfgOut = kit.defaultConfig(TX_MODE);
+    // Codec init lives in codec::begin() (shared with timecode_in).
+    codec::begin();
+
+    auto cfgOut = kit().defaultConfig(RXTX_MODE);
     cfgOut.sample_rate     = cfg::SAMPLE_RATE;
     cfgOut.channels        = cfg::CHANNELS;
     cfgOut.bits_per_sample = cfg::BITS_PER_SAMPLE;
-    kit.begin(cfgOut);
 
     auto cfgRs = resampler.defaultConfig();
     cfgRs.copyFrom(cfgOut);
@@ -137,7 +138,7 @@ bool play(const char* absolutePath) {
 void togglePause() {
     if (!playing) return;
     paused = !paused;
-    kit.setMute(paused);
+    kit().setMute(paused);
 }
 
 void stop() {
@@ -146,7 +147,7 @@ void stop() {
     cueValid_ = false;
     copier.end();
     if (audioFile) audioFile.close();
-    kit.setMute(false);
+    kit().setMute(false);
     wsolaStage.reset();
 }
 
