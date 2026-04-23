@@ -348,6 +348,29 @@ uint32_t filePosition() {
 
 uint32_t trackDurationMs() { return trackDurationMs_; }
 
+bool seekToMs(uint32_t ms) {
+    if (!audioFile || !playing) return false;
+    if (trackDurationMs_ == 0 || ms >= trackDurationMs_) return false;
+    uint32_t byteOff;
+    if (headerSR_ > 0) {
+        // WAV: ms → samples → bytes. Align to frame boundary to avoid
+        // channel swap / clipped samples after seek.
+        uint32_t frameBytes = (uint32_t)channels_ * (bitsPerSample_ / 8);
+        if (frameBytes == 0) return false;
+        uint64_t sampleIdx = (uint64_t)ms * headerSR_ / 1000;
+        byteOff = dataStart_ + (uint32_t)(sampleIdx * frameBytes);
+    } else if (mp3Bitrate_ > 0) {
+        // MP3: ms → bytes via bitrate. Decoder re-syncs on next frame
+        // marker (0xFFE…); audible click on the transition.
+        byteOff = dataStart_ + (uint32_t)((uint64_t)ms * mp3Bitrate_ / 8000);
+    } else {
+        return false;
+    }
+    audioFile.seek(byteOff);
+    wsolaStage.reset();
+    return true;
+}
+
 uint32_t positionMs() {
     if (!audioFile) return 0;
     uint32_t bytePos = audioFile.position();

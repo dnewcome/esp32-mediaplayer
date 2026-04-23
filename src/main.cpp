@@ -364,6 +364,17 @@ void pollSerial() {
             Serial.println(timecode_in::isCdFormat() ? F("CD") : F("VINYL"));
             continue;
         }
+        if (c == 'S') {
+            // Seek to track midpoint — manual test for seekToMs. Phase 6
+            // will drive seek from the timecode position automatically.
+            uint32_t dur = player::trackDurationMs();
+            uint32_t target = dur / 2;
+            bool ok = player::seekToMs(target);
+            Serial.print(F("seekToMs(")); Serial.print(target);
+            Serial.print(F(") → "));
+            Serial.println(ok ? F("OK") : F("refused (not playing or past end)"));
+            continue;
+        }
         if (c == 'K') {
             // Global keylock toggle. setMode() only stores the choice; the
             // pipeline rebinds on the next play(). If a track is already

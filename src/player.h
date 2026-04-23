@@ -51,4 +51,12 @@ uint32_t filePosition();
 uint32_t trackDurationMs();
 uint32_t positionMs();
 
+// Time-based seek. Converts `ms` to a byte offset using the cached
+// WAV/MP3 header info and `audioFile.seek()`s there. Resets the WSOLA
+// overlap-add state. Returns false if not playing, if the format's
+// header hasn't been parsed, or if `ms` is past the track end. WAV:
+// sample-accurate (modulo sub-ms rounding). MP3: the decoder re-syncs
+// on the next 0xFFE frame header, producing a brief audible click.
+bool seekToMs(uint32_t ms);
+
 } // namespace player
