@@ -10,6 +10,17 @@ namespace player {
 //             Noticeably more CPU; quality degrades at extreme ratios.
 enum class Mode { Pitched, Keylock };
 
+// How timecode position maps to track position (used by Phase 6's
+// driveFromTimecode seek logic).
+//   Absolute     : 1 ms of timecode = 1 ms of track. Classic DVS feel.
+//                  Tracks shorter than the timecode (e.g. 3-min track
+//                  on 12-min Serato vinyl) stop at end when tc pos
+//                  exceeds track dur.
+//   Proportional : Full timecode range maps to full track range. A
+//                  3-min track covers the whole 12-min vinyl at a
+//                  4× compression factor.
+enum class TransportMode { Absolute, Proportional };
+
 void begin();
 void loopTick();
 
@@ -22,6 +33,9 @@ float speed();
 
 void  setMode(Mode m);     // takes effect on next play()
 Mode  mode();
+
+void          setTransportMode(TransportMode m);
+TransportMode transportMode();
 
 // Cue points: stored per-playback (cleared on stop / track change).
 // setCuePoint captures the current file byte position; jumpToCue seeks back.

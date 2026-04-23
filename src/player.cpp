@@ -57,6 +57,7 @@ bool  playing   = false;
 bool  paused    = false;
 float curSpeed  = 1.0f;
 Mode  curMode   = Mode::Pitched;
+TransportMode curTransport_ = TransportMode::Absolute;
 
 // Native (un-pitched) sample rate of the current track. 0 until the decoder
 // has reported; setSpeed() multiplies by this to set the I2S clock.
@@ -338,6 +339,9 @@ void setMode(Mode m) {
 }
 
 Mode  mode()      { return curMode; }
+
+void          setTransportMode(TransportMode m) { curTransport_ = m; }
+TransportMode transportMode()                   { return curTransport_; }
 float speed()     { return curSpeed; }
 bool  isPlaying() { return playing;  }
 bool  isPaused()  { return paused;   }

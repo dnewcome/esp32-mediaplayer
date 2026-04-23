@@ -134,6 +134,8 @@ void printHelp() {
         "  global:  K keylock toggle, t timecode arm, f cycle tc flags,\n"
         "           L local-loop (feed decoder from /timecode.wav, no ADC),\n"
         "           F cycle tc format (vinyl/CD),\n"
+        "           P toggle transport mode (absolute/proportional),\n"
+        "           S seek to track midpoint (manual seekToMs test),\n"
         "           D dump ES8388 regs, g/G input gain -/+,\n"
         "           v/V output vol -/+, r rescan SD, ? help\n"));
 }
@@ -375,6 +377,15 @@ void pollSerial() {
             Serial.println(ok ? F("OK") : F("refused (not playing or past end)"));
             continue;
         }
+        if (c == 'P') {
+            // Toggle Absolute ↔ Proportional position mapping.
+            bool abs = (player::transportMode() == player::TransportMode::Absolute);
+            player::setTransportMode(abs ? player::TransportMode::Proportional
+                                          : player::TransportMode::Absolute);
+            Serial.print(F("transport mode: "));
+            Serial.println(abs ? F("PROPORTIONAL") : F("ABSOLUTE"));
+            continue;
+        }
         if (c == 'K') {
             // Global keylock toggle. setMode() only stores the choice; the
             // pipeline rebinds on the next play(). If a track is already
@@ -400,6 +411,27 @@ void pollSerial() {
         else                           handlePlaying(e);
         redraw();
     }
+}
+
+// Map a timecode cycle-index position to a track millisecond target,
+// per the user's selected TransportMode. Pure function — no I/O,
+// easy to test mentally.
+//
+//   Absolute     : target = tc_ms. Caller handles the case where
+//                  target > track_dur_ms (stop at end per plan).
+//   Proportional : target = tc_ms × track_dur / vinyl_len. Assumes
+//                  tc_ms is bounded by vinyl_len_ms (decoder can't
+//                  report positions past that; they'd re-lock at the
+//                  wrap-around state).
+uint32_t mapTcToTrackMs(uint32_t tc_ms,
+                        uint32_t track_dur_ms,
+                        uint32_t vinyl_len_ms,
+                        player::TransportMode mode) {
+    if (mode == player::TransportMode::Absolute) {
+        return tc_ms;
+    }
+    if (vinyl_len_ms == 0) return 0;
+    return (uint32_t)((uint64_t)tc_ms * track_dur_ms / vinyl_len_ms);
 }
 
 // When timecode lock is held, drive player speed from the vinyl. Only
