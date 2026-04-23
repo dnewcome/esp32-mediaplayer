@@ -1,32 +1,51 @@
 #!/usr/bin/env python3
-"""Phase 1 verification: arm tc, enable local-loop, read 15s of traces."""
-import sys, time, threading
-try:
-    import serial
-except ImportError:
-    sys.stderr.write("run via ~/.platformio/penv/bin/python\n"); sys.exit(2)
+"""Phase 1 test: local-loop diagnostic mode.
 
-ser = serial.Serial("/dev/ttyUSB0", 115200, timeout=0.1)
-t0 = time.monotonic()
-stop = threading.Event()
+With the board fresh (no turntable attached), arm tc, switch to CD
+format, enable local-loop. The decoder should lock on /timecode.wav
+within ~1 s, reporting speed≈1.0× steady. This validates the
+file-fed signal path without any hardware dependency.
+"""
+import re
+import time
+from _tchelp import Probe, run_test, require_line, require_count
 
-def rd():
-    buf = b""
-    while not stop.is_set():
-        d = ser.read(512)
-        if not d: continue
-        buf += d
-        while b"\n" in buf:
-            line, buf = buf.split(b"\n", 1)
-            print(f"{time.monotonic()-t0:5.2f}  {line.decode('utf-8', 'replace').rstrip()}")
-            sys.stdout.flush()
+TC_LINE = re.compile(r"\[tc\] speed=(?P<speed>-?\d+\.\d+)\s+locked=(?P<locked>\d)")
 
-th = threading.Thread(target=rd, daemon=True); th.start()
-time.sleep(1.0)
-ser.write(b"t"); time.sleep(1.0)     # arm decoder
-ser.write(b"F"); time.sleep(0.5)     # switch decoder to CD format
-ser.write(b"L"); time.sleep(18.0)    # enable local-loop; expect locked=1 within ~300ms
-ser.write(b"L"); time.sleep(1.0)
-ser.write(b"F"); time.sleep(0.3)     # restore default vinyl format
-ser.write(b"t"); time.sleep(0.5)
-stop.set(); th.join(1.0); ser.close()
+
+def test(p: Probe):
+    p.send(b"t", "arm tc");         time.sleep(0.5)
+    p.send(b"F", "→ CD format");    time.sleep(0.5)
+    p.send(b"L", "local-loop ON");  time.sleep(8.0)
+    p.send(b"L", "local-loop OFF"); time.sleep(0.5)
+
+    # The firmware must acknowledge each toggle on the serial bus.
+    require_line(p.lines, "timecode_in: ON",
+                 "tc was never armed — firmware may have missed the 't' byte")
+    require_line(p.lines, "tc format: CD",
+                 "format toggle to CD not acknowledged")
+    require_line(p.lines, "local-loop: /timecode.wav opened",
+                 "local-loop file open failed — is /timecode.wav on the SD card?")
+
+    # At least ~5 locked [tc] lines at speed ~1.0 during the dwell window.
+    locked_count = 0
+    near_one_count = 0
+    for _ts, s in p.lines:
+        m = TC_LINE.search(s)
+        if not m:
+            continue
+        if m.group("locked") == "1":
+            locked_count += 1
+        if 0.95 < abs(float(m.group("speed"))) < 1.05 and m.group("locked") == "1":
+            near_one_count += 1
+    assert locked_count >= 5, (
+        f"expected ≥5 [tc] locked=1 lines during the 8 s local-loop window, got {locked_count}; "
+        f"decoder may not be matching /timecode.wav (wrong format or flags?)"
+    )
+    assert near_one_count >= 5, (
+        f"expected ≥5 locked lines with speed in [0.95, 1.05] (local-loop plays at 1.0×), "
+        f"got {near_one_count}; decoder is locking but reading the wrong speed"
+    )
+
+
+run_test("phase1_localloop", test)

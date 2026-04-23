@@ -22,3 +22,7 @@ native/vinyl_demo
 
 # Local test captures (large; not for the repo)
 *.wav
+
+# Python bytecode (tools/ scripts)
+__pycache__/
+*.pyc
