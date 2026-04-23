@@ -359,53 +359,52 @@ void pollSerial() {
 // playback at something like 0.90×. So we only steer after lock has
 // been held continuously for LOCK_HOLD_MS, and revert to 1.0× after
 // LOCK_DROP_MS of continuous unlock (treat as "needle up / signal gone").
+// Gate on *speed validity*, not bit-lock. Zero-crossing timing (speed
+// estimate) is robust once the platter is moving; bit-level lock is
+// fragile and often fails to latch at all even when speed is being
+// estimated correctly. Steer while speed is in a sane DJ-platter range;
+// revert to 1.0× after a run of insane values (needle up / motor off).
 void driveFromTimecode() {
     if (!player::isPlaying()) return;
 
-    constexpr uint32_t LOCK_HOLD_MS = 100;
-    constexpr uint32_t LOCK_DROP_MS = 500;
+    constexpr uint32_t APPLY_INTERVAL_MS = 50;     // min gap between reclocks
+    constexpr uint32_t RELEASE_MS        = 500;    // insane-speed hold-over
+    constexpr float    SPEED_MIN         = 0.1f;
+    constexpr float    SPEED_MAX         = 2.0f;
+    // Don't reclock for wiggle smaller than this. Decoder speed estimate
+    // jitters ±0.5% around nominal even at a steady platter; forwarding
+    // every jitter to setSpeed reclocks I²S thousands of times per
+    // minute, which is the audible "glitchy pitch" symptom.
+    constexpr float    DELTA_EPSILON     = 0.01f;  // 1 % change minimum
 
-    static uint32_t lockedSinceMs   = 0;
-    static uint32_t unlockedSinceMs = 0;
-    static bool     wasLocked       = false;
-    static bool     steering        = false;
+    static uint32_t lastApplyMs  = 0;
+    static uint32_t lastSaneMs   = 0;
+    static float    lastApplied  = 1.0f;
+    static bool     steering     = false;
 
     if (!timecode_in::enabled()) {
-        // Disarming releases any timecode-held speed so manual control
-        // isn't fighting a frozen value from the last session.
-        if (steering) { player::setSpeed(1.0f); steering = false; }
-        wasLocked = false;
+        if (steering) { player::setSpeed(1.0f); steering = false; lastApplied = 1.0f; }
         return;
     }
 
-    const bool     locked = timecode_in::locked();
-    const uint32_t now    = millis();
+    const float    s    = timecode_in::speed();
+    const float    m    = s < 0 ? -s : s;
+    const uint32_t now  = millis();
+    const bool     sane = (m >= SPEED_MIN && m <= SPEED_MAX);
 
-    if (locked != wasLocked) {
-        if (locked) lockedSinceMs   = now;
-        else        unlockedSinceMs = now;
-        wasLocked = locked;
-    }
-
-    if (locked) {
-        if (now - lockedSinceMs >= LOCK_HOLD_MS) {
-            // Rate-limit setSpeed calls: each one reclocks the I²S peripheral
-            // (via kit().setAudioInfo → changeSampleRate), which stalls the TX
-            // DMA for a few samples. At the main-loop rate (thousands/sec)
-            // that compounds into audible stutter. 20 ms cadence (50 Hz) is
-            // plenty responsive for a platter while giving the TX DMA room
-            // to breathe between clock changes.
-            constexpr uint32_t APPLY_INTERVAL_MS = 20;
-            static uint32_t lastApplyMs = 0;
-            if (now - lastApplyMs >= APPLY_INTERVAL_MS) {
-                player::setSpeed(timecode_in::speed());
-                lastApplyMs = now;
-            }
-            steering = true;
+    if (sane) {
+        lastSaneMs = now;
+        const float delta = s > lastApplied ? s - lastApplied : lastApplied - s;
+        if (delta >= DELTA_EPSILON && now - lastApplyMs >= APPLY_INTERVAL_MS) {
+            player::setSpeed(s);
+            lastApplyMs = now;
+            lastApplied = s;
+            steering    = true;
         }
-    } else if (steering && (now - unlockedSinceMs >= LOCK_DROP_MS)) {
+    } else if (steering && (now - lastSaneMs >= RELEASE_MS)) {
         player::setSpeed(1.0f);
-        steering = false;
+        lastApplied = 1.0f;
+        steering    = false;
     }
 }
 

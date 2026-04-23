@@ -42,20 +42,11 @@ WAVDecoder      wav;
 //     SD file --(copier)--> EncodedAudioStream --> WsolaStream --> kit
 //     kit stays at the file's native rate; WSOLA does the stretching.
 
-// WSOLA sinks through the TX meter so the meter observes TX audio even
-// when the (shared) decoder's setOutput race leaves mp3.out pointing at
-// wsolaStage (last EncodedAudioStream constructor wins — see below).
-wsola::WsolaStream wsolaStage(out());
+wsola::WsolaStream wsolaStage(kit());
 
-// Two encoded streams; we point the copier at whichever matches the file
-// type. Both "toKit" variants target the TX meter, which forwards to kit.
-// Both "toWsola" variants target wsolaStage, which also forwards through
-// the meter to kit. The decoder is SHARED between pitched/keylock pairs,
-// so its internal out ends up wherever the last-constructed stream
-// pointed it — currently wsolaStage. That's fine because wsolaStage's
-// sink is the meter, so TX audio flows through our tap regardless.
-EncodedAudioStream mp3ToKit ((Print*)&out(),    &mp3);
-EncodedAudioStream wavToKit ((Print*)&out(),    &wav);
+// Two encoded streams; we point the copier at whichever matches the file type.
+EncodedAudioStream mp3ToKit (&kit(),       &mp3);
+EncodedAudioStream wavToKit (&kit(),       &wav);
 EncodedAudioStream mp3ToWsola(&wsolaStage, &mp3);
 EncodedAudioStream wavToWsola(&wsolaStage, &wav);
 

@@ -21,13 +21,13 @@ int16_t       rxBuf_[PUMP_FRAMES * 2];
 
 // Per-window diagnostics. Written by the task, read+reset by the main
 // loop via takeStats(). Guarded by a portMUX spinlock — the naive
-// volatile + read-modify-write approach lets the task clobber
-// takeStats()'s reset, which carries the old peak into the next
-// window. Under a clipping carrier the result was "peak pinned at
-// 32767 forever" even after the real signal normalised.
-int16_t         statsPeak_   = 0;
-uint32_t        statsFrames_ = 0;
-portMUX_TYPE    statsMux_    = portMUX_INITIALIZER_UNLOCKED;
+// volatile approach lets the task's read-modify-write clobber
+// takeStats()'s reset, carrying counters (peak and frames) into the
+// next window. Visible as frames bouncing well away from the expected
+// 44k/sec and peak stuck above its real value.
+int16_t      statsPeak_   = 0;
+uint32_t     statsFrames_ = 0;
+portMUX_TYPE statsMux_    = portMUX_INITIALIZER_UNLOCKED;
 
 TaskHandle_t      tcTask_ = nullptr;
 

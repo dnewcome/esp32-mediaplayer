@@ -69,15 +69,10 @@ void begin() {
     k.begin(cfg);
     started_ = true;
 
-    // Drop the ADC input PGA to 0 dB. Library default (ES8388_DEFAULT_INPUT_GAIN
-    // = 25, ~+24 dB) is sized for mic-level sources and rails the ADC on a
-    // line-level signal (turntable line-out, phono-preamp output, mixer send).
-    // Adjustable live via adjustInputGain() — start at 0 and bump up if the
-    // source is too quiet.
-    k.setInputVolume(0);
+    // PGA left at library default (+24 dB). Worked for headphone-out;
+    // line-level sources may rail and need `g` presses to attenuate.
+    // Live-adjustable via adjustInputGain().
 
-    // Start the TX volume meter. By now the player's global constructors
-    // have already called txSink(), which instantiated the meter.
     if (txMeter_) txMeter_->begin();
 }
 
@@ -101,8 +96,9 @@ void adjustOutputVolume(int delta) {
 void adjustInputGain(int delta) {
     // setInputVolume takes 0..100, mapped internally to MIC_GAIN_0DB..24DB in
     // 3 dB steps. Track our own value since the library doesn't expose a
-    // getter. Clamped to the same 0..100 range.
-    static int vol = 0;
+    // getter. Start at 100 because codec::begin leaves PGA at the library
+    // default (+24 dB), so pressing g from here actually decreases gain.
+    static int vol = 100;
     vol += delta;
     if (vol < 0)   vol = 0;
     if (vol > 100) vol = 100;
