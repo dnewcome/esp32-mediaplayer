@@ -301,6 +301,22 @@ void pollSerial() {
         if (c == '?') { printHelp(); continue; }
         if (c == 'r') { scanSD(); selected = 0; redraw(); continue; }
         if (c == 'D') { codec::dumpRegs(); continue; }
+        // --- DAC→ADC coupling probes. Manipulate ES8388 regs at runtime
+        //     so we can A/B which output stage is the dominant coupling
+        //     path without reflashing.
+        //   1: only HP (LOUT1/ROUT1) enabled — Dan's default monitoring
+        //      path. If rx drops, LINE OUT stage was the coupler.
+        //   2: only LINE OUT (LOUT2/ROUT2) — HP goes silent, rx should
+        //      tell whether HP stage was coupling.
+        //   3: all outputs (default, 0x3C).
+        //   M: mute DAC (LDACVOL/RDACVOL → -96dB). Impossibility check:
+        //      rx MUST drop — if not, there's a non-DAC path at play.
+        //   U: un-mute DAC.
+        if (c == '1') { codec::writeReg(0x04, 0x0C); Serial.println(F("reg04=0x0C (HP only)")); continue; }
+        if (c == '2') { codec::writeReg(0x04, 0x30); Serial.println(F("reg04=0x30 (LINE OUT only)")); continue; }
+        if (c == '3') { codec::writeReg(0x04, 0x3C); Serial.println(F("reg04=0x3C (all outputs)")); continue; }
+        if (c == 'M') { codec::writeReg(0x1A, 0xC0); codec::writeReg(0x1B, 0xC0); Serial.println(F("DAC vol = -96dB (muted)")); continue; }
+        if (c == 'U') { codec::writeReg(0x1A, 0x00); codec::writeReg(0x1B, 0x00); Serial.println(F("DAC vol = 0dB")); continue; }
         if (c == 'f') {
             uint32_t f = timecode_in::cycleFlags();
             Serial.print(F("tc flags=0x"));
