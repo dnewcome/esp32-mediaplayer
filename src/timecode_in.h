@@ -42,4 +42,22 @@ Stats   takeStats();
 // switching from headphone-out to line-out can invert bit polarity.
 uint32_t cycleFlags();
 
+// Diagnostic "local-loop" mode. When ON, the decoder is fed stereo PCM
+// frames read directly from /timecode.wav on SD, bypassing the ADC and
+// the DAC→ADC coupling path entirely. Intended for validating position
+// lookup, driveFromTimecode, and seek logic without any hardware
+// signal — the result is deterministic: steady speed≈1.0× and
+// monotonically-increasing position. Toggle is independent of the
+// `enabled()` flag, but both must be ON for frames to reach the
+// decoder. Returns false if the file could not be opened.
+bool setLocalLoop(bool on);
+bool localLoop();
+
+// Cycle decoder format between SeratoControlVinyl and SeratoControlCD.
+// Different seeds/taps: bit-lock can't happen cross-format even though
+// the carrier frequency is the same. Required to get locked=1 in
+// local-loop when /timecode.wav is CD-format. Resets decoder state.
+void cycleFormat();
+bool isCdFormat();
+
 } // namespace timecode_in

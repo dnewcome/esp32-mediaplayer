@@ -132,6 +132,8 @@ void printHelp() {
         "  playing: +/- speed (fine), [/] speed (coarse), = snap-1.0,\n"
         "           < > hold-to-nudge (-/+2%), p pause, b back, c cue, C set-cue\n"
         "  global:  K keylock toggle, t timecode arm, f cycle tc flags,\n"
+        "           L local-loop (feed decoder from /timecode.wav, no ADC),\n"
+        "           F cycle tc format (vinyl/CD),\n"
         "           D dump ES8388 regs, g/G input gain -/+,\n"
         "           v/V output vol -/+, r rescan SD, ? help\n"));
 }
@@ -337,6 +339,24 @@ void pollSerial() {
             timecode_in::setEnabled(on);
             Serial.print(F("timecode_in: "));
             Serial.println(on ? F("ON") : F("OFF"));
+            continue;
+        }
+        if (c == 'L') {
+            // Local-loop diagnostic: feed decoder from /timecode.wav on SD
+            // instead of the ADC. Lets us test position/seek/mapping logic
+            // without hardware. Task prints confirmation on successful open.
+            bool on = !timecode_in::localLoop();
+            timecode_in::setLocalLoop(on);
+            Serial.print(F("local-loop request: "));
+            Serial.println(on ? F("ON") : F("OFF"));
+            continue;
+        }
+        if (c == 'F') {
+            // Cycle decoder format Vinyl ↔ CD. Resets decoder state.
+            // Required to match /timecode.wav (CD-format) in local-loop.
+            timecode_in::cycleFormat();
+            Serial.print(F("tc format: "));
+            Serial.println(timecode_in::isCdFormat() ? F("CD") : F("VINYL"));
             continue;
         }
         if (c == 'K') {
