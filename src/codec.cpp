@@ -13,88 +13,35 @@ bool started_ = false;
 // than ES8388_ADDR — the library header #defines that symbol.)
 constexpr uint8_t I2C_ADDR = 0x10;
 
-// Peak of TX samples written through txSink, written by the main-loop
-// copier (core 1) and read+reset by the [tc] trace print (also core 1,
-// same thread — no cross-core races to worry about for this one).
-int16_t txPeak_ = 0;
-
-// Wrapper around kit() that scans each PCM buffer for peak amplitude
-// before forwarding the write. int16 stereo format is assumed (matches
-// cfg::BITS_PER_SAMPLE = 16, cfg::CHANNELS = 2). Everything that's not
-// write() just forwards to kit so the MP3/WAV decoder chain behaves
-// identically — including setAudioInfo notifications that reclock I²S
-// for varispeed.
-class TxSink : public AudioStream {
-public:
-    void bind(AudioBoardStream& target) { target_ = &target; }
-
-    size_t write(uint8_t c) override {
-        // I2SCodecStream hides single-byte write; forward as a 1-byte buf.
-        return target_ ? target_->write(&c, 1) : 0;
-    }
-    size_t write(const uint8_t* data, size_t len) override {
-        if (!target_) return 0;
-        // Peak across the buffer. Decoded PCM is int16 stereo.
-        const int16_t* s = reinterpret_cast<const int16_t*>(data);
-        const size_t   n = len / sizeof(int16_t);
-        int16_t p = 0;
-        for (size_t i = 0; i < n; ++i) {
-            int16_t v = s[i];
-            int16_t a = (v == INT16_MIN) ? INT16_MAX
-                                         : (int16_t)(v < 0 ? -v : v);
-            if (a > p) p = a;
-        }
-        if (p > txPeak_) txPeak_ = p;
-        txWriteCount_++;
-        txWriteCountTotal_++;
-
-        // Throttled trace so we can see with our own eyes whether this path
-        // is ever hit. Prints at most once every 500 ms.
-        static uint32_t lastDbg = 0;
-        uint32_t now = millis();
-        if (now - lastDbg >= 500) {
-            lastDbg = now;
-            Serial.printf("[tx-hit] len=%u p=%d total=%u\n",
-                          (unsigned)len, (int)p, (unsigned)txWriteCountTotal_);
-        }
-        return target_->write(data, len);
-    }
-
-    uint32_t txWriteCount_      = 0;
-    uint32_t txWriteCountTotal_ = 0;
-
-    int available() override          { return target_ ? target_->available() : 0; }
-    int availableForWrite() override  { return target_ ? target_->availableForWrite() : 0; }
-    size_t readBytes(uint8_t* b, size_t n) override {
-        return target_ ? target_->readBytes(b, n) : 0;
-    }
-    AudioInfo audioInfo() override {
-        return target_ ? target_->audioInfo() : AudioInfo{};
-    }
-    void setAudioInfo(AudioInfo info) override {
-        AudioStream::setAudioInfo(info);
-        if (target_) target_->setAudioInfo(info);
-    }
-
-private:
-    AudioBoardStream* target_ = nullptr;
-};
-
-TxSink txSink_;
+// In-chain volume meter — the arduino-audio-tools library primitive for
+// tapping peak levels. Constructed lazily in txSink() so it can reference
+// kit() safely across translation-unit init ordering.
+VolumeMeter* txMeter_ = nullptr;
 } // namespace
 
-AudioStream& txSink() { return txSink_; }
+AudioStream& txSink() {
+    // Lazy: kit() is a function-local static, guaranteed constructed on
+    // first call. Instantiate the VolumeMeter the same way so we can't
+    // hit cross-TU static init ordering bugs.
+    static VolumeMeter inst(kit());
+    txMeter_ = &inst;
+    return inst;
+}
 
 int16_t takeTxPeak() {
-    int16_t p = txPeak_;
-    txPeak_ = 0;
-    return p;
+    if (!txMeter_) return 0;
+    // VolumeMeter::volume() returns the current peak amplitude. It's an
+    // EMA-style running value so we don't need reset-on-read — it'll
+    // decay naturally as quieter audio flows through.
+    float v = txMeter_->volume();
+    if (v < 0.0f)        v = 0.0f;
+    if (v > (float)INT16_MAX) v = (float)INT16_MAX;
+    return (int16_t)v;
 }
 
 uint32_t takeTxWriteCount() {
-    uint32_t c = txSink_.txWriteCount_;
-    txSink_.txWriteCount_ = 0;
-    return c;
+    // Library handles this internally — stub retained for API stability.
+    return 0;
 }
 
 AudioBoardStream& kit() {
@@ -111,7 +58,6 @@ AudioBoardStream& kit() {
 void begin() {
     if (started_) return;
     auto& k = kit();
-    txSink_.bind(k);
     auto cfg = k.defaultConfig(RXTX_MODE);
     cfg.sample_rate     = cfg::SAMPLE_RATE;
     cfg.channels        = cfg::CHANNELS;
@@ -129,6 +75,10 @@ void begin() {
     // Adjustable live via adjustInputGain() — start at 0 and bump up if the
     // source is too quiet.
     k.setInputVolume(0);
+
+    // Start the TX volume meter. By now the player's global constructors
+    // have already called txSink(), which instantiated the meter.
+    if (txMeter_) txMeter_->begin();
 }
 
 void adjustOutputVolume(int delta) {

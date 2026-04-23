@@ -451,8 +451,7 @@ void loop() {
         if (now - lastTcTraceMs >= 1000) {
             lastTcTraceMs = now;
             auto st = timecode_in::takeStats();
-            int16_t  txPeak  = codec::takeTxPeak();
-            uint32_t txCount = codec::takeTxWriteCount();
+            int16_t txPeak = codec::takeTxPeak();
             Serial.print(F("[tc] speed="));
             Serial.print(timecode_in::speed(), 3);
             Serial.print(F("  locked="));
@@ -461,8 +460,6 @@ void loop() {
             Serial.print(st.peak);
             Serial.print(F("  tx="));
             Serial.print(txPeak);
-            Serial.print(F("  txwrites="));
-            Serial.print(txCount);
             Serial.print(F("  frames="));
             Serial.println(st.frames);
         }
