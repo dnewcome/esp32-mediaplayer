@@ -2,9 +2,13 @@
 
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifdef TIMECODE_NATIVE
 #include <unordered_map>
+#else
+#include <Arduino.h>
+#include <esp_heap_caps.h>
 #endif
 
 namespace timecode {
@@ -95,6 +99,107 @@ void buildLut(const Def& d, Lut& out) {
 }
 #endif
 
+#ifndef TIMECODE_NATIVE
+// Device-side dense LUT, backed by PSRAM. 20-bit LFSR → 1M entries.
+// Each cycle index also fits in 20 bits (max 950k for CD); we pack
+// 24 bits (3 bytes) per entry → 3 MB total. A byte-addressable 4 MB
+// array (uint32_t per entry) would be cleaner but the A1S module's
+// 4 MB PSRAM has ~2 KB of heap overhead, so the single 4 MB alloc
+// fails in practice. 3 MB has ~1 MB of headroom — fits the 4 MB board
+// and leaves room for future allocations.
+//
+// Sentinel for "state not reached in LFSR sequence": 0xFFFFFF (16M).
+//
+// Format switches leak the old buffer on purpose: switches are rare
+// (manual keypress) and freeing across the active tc task without
+// synchronization would race with concurrent lookups. On a 4 MB
+// board, switching to CD after Vinyl will fail allocation — the
+// second 3 MB chunk doesn't fit. That's fine; user switches back.
+constexpr size_t DEV_LUT_ENTRIES = 1u << 20;
+constexpr size_t DEV_LUT_BYTES   = DEV_LUT_ENTRIES * 3;     // 3 MB, packed
+constexpr uint32_t DEV_LUT_EMPTY = 0xFFFFFFu;               // 24-bit sentinel
+uint8_t*  g_devLut_    = nullptr;
+Format    g_devLutFmt_ = Format::SeratoControlVinyl;
+bool      g_devLutFailed_ = false;   // sticky: don't retry alloc on every lookup
+
+inline uint32_t lutRead(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
+}
+inline void lutWrite(uint8_t* p, uint32_t v) {
+    p[0] = (uint8_t)(v & 0xFF);
+    p[1] = (uint8_t)((v >> 8) & 0xFF);
+    p[2] = (uint8_t)((v >> 16) & 0xFF);
+}
+
+void buildDeviceLut(const Def& d) {
+    if (g_devLutFailed_) return;
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+    if (largest < DEV_LUT_BYTES) {
+        Serial.printf("[tc] PSRAM largest free block %u < required %u; position unavailable\n",
+                      (unsigned)largest, (unsigned)DEV_LUT_BYTES);
+        g_devLutFailed_ = true;
+        return;
+    }
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(DEV_LUT_BYTES, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        Serial.println(F("[tc] PSRAM LUT alloc FAILED; position unavailable"));
+        g_devLutFailed_ = true;
+        return;
+    }
+    memset(buf, 0xFF, DEV_LUT_BYTES);
+
+    uint32_t t0 = millis();
+    uint32_t cur = d.seed;
+    for (uint32_t i = 0; i < d.length; ++i) {
+        lutWrite(buf + (size_t)cur * 3, i);
+        cur = lfsrFwd(cur, d.taps, d.bits);
+    }
+    uint32_t ms = millis() - t0;
+
+    // Leak old LUT on format switch; see file-scope comment.
+    g_devLut_    = buf;
+    g_devLutFmt_ = d.fmt;
+    Serial.printf("[tc] LUT built for %s: %u entries in %u ms (PSRAM free %u)\n",
+                  d.fmt == Format::SeratoControlVinyl ? "VINYL" : "CD",
+                  (unsigned)d.length, (unsigned)ms,
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+#endif
+
+}  // namespace  (close anon namespace so prebuildLut has external linkage)
+
+void prebuildLut(Format f) {
+#ifndef TIMECODE_NATIVE
+    if (g_devLut_ != nullptr && g_devLutFmt_ == f) return;
+    buildDeviceLut(findDef(f));
+#else
+    buildLut(findDef(f), lutFor(f));
+#endif
+}
+
+void rebuildLutInPlace(Format f) {
+#ifndef TIMECODE_NATIVE
+    if (g_devLut_ == nullptr) return;  // no buffer to rewrite
+    const Def& d = findDef(f);
+    uint32_t t0 = millis();
+    memset(g_devLut_, 0xFF, DEV_LUT_BYTES);
+    uint32_t cur = d.seed;
+    for (uint32_t i = 0; i < d.length; ++i) {
+        lutWrite(g_devLut_ + (size_t)cur * 3, i);
+        cur = lfsrFwd(cur, d.taps, d.bits);
+    }
+    g_devLutFmt_ = d.fmt;
+    Serial.printf("[tc] LUT rewritten for %s: %u entries in %u ms (PSRAM free %u)\n",
+                  d.fmt == Format::SeratoControlVinyl ? "VINYL" : "CD",
+                  (unsigned)d.length, (unsigned)(millis() - t0),
+                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+#else
+    buildLut(findDef(f), lutFor(f));
+#endif
+}
+
+namespace {
+
 int32_t lookupPosition(Format f, uint32_t bs) {
 #ifdef TIMECODE_NATIVE
     const Def& d = findDef(f);
@@ -103,8 +208,13 @@ int32_t lookupPosition(Format f, uint32_t bs) {
     auto it = lut.map.find(bs);
     return (it == lut.map.end()) ? -1 : (int32_t)it->second;
 #else
-    (void)f; (void)bs;
-    return -1;  // ESP32 path: LUT storage is future work (needs PSRAM).
+    if (g_devLut_ == nullptr || g_devLutFmt_ != f) {
+        const Def& d = findDef(f);
+        buildDeviceLut(d);
+        if (g_devLut_ == nullptr) return -1;
+    }
+    uint32_t v = lutRead(g_devLut_ + (size_t)bs * 3);
+    return v == DEV_LUT_EMPTY ? -1 : (int32_t)v;
 #endif
 }
 

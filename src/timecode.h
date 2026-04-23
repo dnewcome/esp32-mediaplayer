@@ -53,6 +53,19 @@ enum class Format : uint8_t {
     SeratoControlCD,
 };
 
+// Eagerly build the position LUT for `f` (PSRAM-backed on ESP32).
+// Safe to call from any context; no-op after the first successful
+// build for that format. Call from setup() to avoid the ~2.5 s stall
+// that otherwise hits the first call to Decoder::pushFrames on the
+// tc task. No-op on host builds (which use a std::unordered_map).
+void prebuildLut(Format f);
+
+// Rewrite the existing LUT buffer with entries for `f`. Caller must
+// guarantee no reader is active (on ESP32, suspend the tc task).
+// Skips allocation — reuses the 3 MB PSRAM buffer built for the
+// initial format. No-op if prebuildLut hasn't run yet or on host.
+void rebuildLutInPlace(Format f);
+
 class Decoder {
 public:
     void begin(int sampleRate, Format fmt = Format::SeratoControlCD);

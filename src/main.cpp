@@ -225,6 +225,11 @@ void setup() {
     Serial.begin(115200);
     delay(200);
 
+    // Log PSRAM availability — timecode::lookupPosition's LUT needs ~4 MB.
+    Serial.printf("[boot] PSRAM total=%u free=%u (need ~4 MB for tc position LUT)\n",
+                  (unsigned)ESP.getPsramSize(),
+                  (unsigned)ESP.getFreePsram());
+
     controls::begin();
     ui::begin();
     player::begin();
@@ -510,6 +515,8 @@ void loop() {
             Serial.print(st.peak);
             Serial.print(F("  tx="));
             Serial.print(txPeak);
+            Serial.print(F("  pos="));
+            Serial.print(timecode_in::position());  // cycle index, -1 until LUT lock
             Serial.print(F("  frames="));
             Serial.println(st.frames);
         }

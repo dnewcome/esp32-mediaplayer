@@ -170,6 +170,11 @@ void begin() {
     // estimation works on either carrier. Runtime-switchable via
     // cycleFormat() for local-loop testing with /timecode.wav.
     dec_.begin(cfg::SAMPLE_RATE, fmt_);
+    // Build the position LUT on the caller's thread so the ~2.5 s PSRAM
+    // fill doesn't stall the tc task later. Lazy build inside pushFrames
+    // would accumulate a burst in the codec FIFO or the local-loop file
+    // read path — easier to just pay the cost up front.
+    timecode::prebuildLut(fmt_);
     // ES8388 on A1S V2.3 delivers I²S frames with channels swapped
     // relative to xwax's primary=R convention — SWITCH_PRIMARY puts the
     // decoder's primary/secondary assignment back in phase with Serato's
@@ -215,6 +220,13 @@ void cycleFormat() {
     fmt_ = (fmt_ == timecode::Format::SeratoControlVinyl)
              ? timecode::Format::SeratoControlCD
              : timecode::Format::SeratoControlVinyl;
+    // Overwrite the existing LUT buffer in place — avoids needing a
+    // second 3 MB PSRAM chunk on the 4 MB board. Suspend the task
+    // during the overwrite so no concurrent lookup reads half-written
+    // entries. dec_.begin() inside the window resets decoder state,
+    // so any transient is discarded anyway.
+    if (tcTask_) vTaskSuspend(tcTask_);
+    timecode::rebuildLutInPlace(fmt_);
     dec_.begin(cfg::SAMPLE_RATE, fmt_);
     // Different flag defaults per format, matching the typical source:
     //   Vinyl: turntable → ES8388 LINE2, channels swapped by the codec
@@ -228,6 +240,7 @@ void cycleFormat() {
                      ? timecode::SWITCH_PRIMARY
                      : 0u;
     dec_.setFlags(flags);
+    if (tcTask_) vTaskResume(tcTask_);
 }
 
 bool isCdFormat() {
