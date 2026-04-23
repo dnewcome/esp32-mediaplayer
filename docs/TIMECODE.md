@@ -351,25 +351,58 @@ the comprehensive list.
 ## Test harnesses (`tools/`)
 
 All run via `~/.platformio/penv/bin/python tools/<name>.py`
-(pyserial is bundled in the pio venv). They open `/dev/ttyUSB0`,
-drive scripted keystrokes, and print timestamped output.
+(pyserial is bundled in the pio venv). Each opens `/dev/ttyUSB0`,
+drives scripted keystrokes, and prints timestamped output.
+
+Split into two categories:
+
+### Regression tests (self-asserting; exit 0 = PASS, 1 = FAIL)
+
+These run a scenario, capture all serial output into a buffer, and
+check predicates on it. Each one resets the board on entry
+(DTR/RTS pulse, then waits ~4.5 s for boot + LUT build) so tests are
+independent — previous-test residue can't poison the next.
+
+| Script | What it verifies |
+|--------|-----------------|
+| `tc_localloop.py` | Phase 1: `L + F` → ≥5 `locked=1` lines at speed ∈ [0.95, 1.05] |
+| `tc_duration.py`  | Phase 3: WAV + MP3 duration parse; positionMs climbs 1:1 with wall time |
+| `tc_seek.py`      | Phase 4: `S` key → `seekToMs → OK`, first pos within ±200 ms of target |
+| `tc_phase6.py`    | Phase 6: ABS seek fires; PROP speeds in (0.10, 0.25); ≤5 PROP seeks in 8 s (regression guard for speed-scale fix); needle-up pause line |
+| `tc_flags_scan.py`| ≥1 of the 8 decoder flag combos achieves `locked=1` on /timecode.wav |
+
+**Runner**: `tools/run_tests.py` subprocess-launches each test
+sequentially (serial can't parallelize — single `/dev/ttyUSB0`),
+collects exit codes, prints a summary table. Run all or a subset:
+
+```bash
+~/.platformio/penv/bin/python tools/run_tests.py              # all 5, ~113 s
+~/.platformio/penv/bin/python tools/run_tests.py tc_seek      # one
+```
+
+Shared `tools/_tchelp.py` owns the `Probe` context-manager
+(reset + serial + reader thread + log buffer) and the
+`require_line` / `require_count` assertion helpers. New tests
+that want to join the suite should use the same pattern —
+`run_test(name, scenario_fn)` wraps the PASS/FAIL/ERROR exit
+convention in one line.
+
+### Exploration utilities (no assertions, print-only)
+
+For poking at things that aren't regression-worthy yet, or for
+characterizing new hardware / reproducing a bug by eye.
 
 | Script | Purpose |
 |--------|---------|
-| `tc_probe.py <scenario>` | Multi-scenario probe; arg picks one: |
+| `tc_probe.py <scenario>` | Multi-scenario characterization probe. Scenarios: |
 | &nbsp;&nbsp;`sine`     | Volume + pause + PGA ramps, separates pre- vs post-PGA coupling |
 | &nbsp;&nbsp;`volume`   | Step DAC vol 100→0 during playback; confirms coupling is analog |
 | &nbsp;&nbsp;`outputs`  | A/B LOUT1 vs LOUT2 to find dominant coupler (answer: neither) |
 | &nbsp;&nbsp;`selfloop` | Play timecode.wav through DAC, decode via coupling |
 | &nbsp;&nbsp;`smoothing`| Self-loop in keylock (limited — WSOLA mangles timecode) |
 | &nbsp;&nbsp;`turntable`| End-to-end with real platter spinning |
-| `tc_localloop.py`     | Phase 1 verification: L + F, expect locked=1 |
-| `tc_flags_scan.py`    | Sweep all 8 decoder flag combos to find lock |
-| `tc_duration.py`      | Phase 3 verification: WAV + MP3 duration parse |
-| `tc_seek.py`          | Phase 4 verification: S key midpoint jump |
-| `tc_phase6.py`        | Phase 6 end-to-end: ABS + PROP + needle-up pause |
-| `tc_sanity.py`        | Quick sanity check: arm tc, read 6 s of traces |
-| `tc_boot.py`          | RTS-based reset; captures boot log incl. PSRAM size |
+| `tc_sanity.py`         | Quick sanity check: arm tc, read 6 s of traces |
+| `tc_boot.py`           | DTR/RTS reset; captures boot log incl. PSRAM size |
 
 ---
 
