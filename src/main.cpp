@@ -490,6 +490,10 @@ void loop() {
             lastTraceMs = now;
             Serial.print(F("[play] pos="));
             Serial.print(player::filePosition());
+            Serial.print(F("  ms="));
+            Serial.print(player::positionMs());
+            Serial.print('/');
+            Serial.print(player::trackDurationMs());
             Serial.print(F("  speed="));
             Serial.print(player::speed(), 2);
             Serial.println('x');

@@ -39,4 +39,16 @@ bool isPaused();
 // this climbs, the copier is actually draining bytes. 0 when stopped.
 uint32_t filePosition();
 
+// Track duration / playback position in milliseconds.
+//   trackDurationMs : latched at play() from WAV header or first MP3
+//                     frame bitrate. 0 if not determined (unsupported
+//                     format, MP3 bitrate parse failed, stopped).
+//   positionMs      : current playback position, derived from the
+//                     current byte offset and the cached sample rate
+//                     (WAV) or cached bitrate (MP3). 0 when stopped.
+// Both are used by driveFromTimecode's position-based seek logic
+// once Phase 4-6 land; exposed now so Phase 3 is a separate commit.
+uint32_t trackDurationMs();
+uint32_t positionMs();
+
 } // namespace player
