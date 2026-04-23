@@ -36,4 +36,10 @@ int32_t position();   // -1 on ESP32 (LUT is Phase 2 work)
 struct Stats { int16_t peak; uint32_t frames; };
 Stats   takeStats();
 
+// Cycle the decoder's convention flags (SWITCH_PHASE / SWITCH_PRIMARY /
+// SWITCH_POLARITY) through 0..7. Useful during bring-up when the input
+// signal chain differs from what SWITCH_PRIMARY alone covers — e.g.
+// switching from headphone-out to line-out can invert bit polarity.
+uint32_t cycleFlags();
+
 } // namespace timecode_in

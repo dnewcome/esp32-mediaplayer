@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <SD_MMC.h>
 
+#include "codec.h"
 #include "config.h"
 #include "controls.h"
 #include "ui.h"
@@ -130,7 +131,9 @@ void printHelp() {
         "  browser: w/s scroll, enter play\n"
         "  playing: +/- speed (fine), [/] speed (coarse), = snap-1.0,\n"
         "           < > hold-to-nudge (-/+2%), p pause, b back, c cue, C set-cue\n"
-        "  global:  K keylock toggle, t timecode arm, r rescan SD, ? help\n"));
+        "  global:  K keylock toggle, t timecode arm, f cycle tc flags,\n"
+        "           D dump ES8388 regs, g/G input gain -/+,\n"
+        "           v/V output vol -/+, r rescan SD, ? help\n"));
 }
 
 void redraw() {
@@ -297,6 +300,22 @@ void pollSerial() {
         if (c < 0) break;
         if (c == '?') { printHelp(); continue; }
         if (c == 'r') { scanSD(); selected = 0; redraw(); continue; }
+        if (c == 'D') { codec::dumpRegs(); continue; }
+        if (c == 'f') {
+            uint32_t f = timecode_in::cycleFlags();
+            Serial.print(F("tc flags=0x"));
+            Serial.print(f, HEX);
+            Serial.print(F("  ("));
+            Serial.print((f & 0x1) ? F("PHASE ")    : F("       "));
+            Serial.print((f & 0x2) ? F("PRIMARY ")  : F("        "));
+            Serial.print((f & 0x4) ? F("POLARITY")  : F("        "));
+            Serial.println(')');
+            continue;
+        }
+        if (c == 'g') { codec::adjustInputGain(-10); continue; }
+        if (c == 'G') { codec::adjustInputGain(+10); continue; }
+        if (c == 'v') { codec::adjustOutputVolume(-10); continue; }
+        if (c == 'V') { codec::adjustOutputVolume(+10); continue; }
         if (c == 't') {
             bool on = !timecode_in::enabled();
             timecode_in::setEnabled(on);
@@ -370,7 +389,18 @@ void driveFromTimecode() {
 
     if (locked) {
         if (now - lockedSinceMs >= LOCK_HOLD_MS) {
-            player::setSpeed(timecode_in::speed());
+            // Rate-limit setSpeed calls: each one reclocks the I²S peripheral
+            // (via kit().setAudioInfo → changeSampleRate), which stalls the TX
+            // DMA for a few samples. At the main-loop rate (thousands/sec)
+            // that compounds into audible stutter. 20 ms cadence (50 Hz) is
+            // plenty responsive for a platter while giving the TX DMA room
+            // to breathe between clock changes.
+            constexpr uint32_t APPLY_INTERVAL_MS = 20;
+            static uint32_t lastApplyMs = 0;
+            if (now - lastApplyMs >= APPLY_INTERVAL_MS) {
+                player::setSpeed(timecode_in::speed());
+                lastApplyMs = now;
+            }
             steering = true;
         }
     } else if (steering && (now - unlockedSinceMs >= LOCK_DROP_MS)) {
@@ -421,12 +451,18 @@ void loop() {
         if (now - lastTcTraceMs >= 1000) {
             lastTcTraceMs = now;
             auto st = timecode_in::takeStats();
+            int16_t  txPeak  = codec::takeTxPeak();
+            uint32_t txCount = codec::takeTxWriteCount();
             Serial.print(F("[tc] speed="));
             Serial.print(timecode_in::speed(), 3);
             Serial.print(F("  locked="));
             Serial.print(timecode_in::locked() ? 1 : 0);
-            Serial.print(F("  peak="));
+            Serial.print(F("  rx="));
             Serial.print(st.peak);
+            Serial.print(F("  tx="));
+            Serial.print(txPeak);
+            Serial.print(F("  txwrites="));
+            Serial.print(txCount);
             Serial.print(F("  frames="));
             Serial.println(st.frames);
         }

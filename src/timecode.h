@@ -63,7 +63,8 @@ public:
     // or cabling, opposite direction convention, inverted bit polarity)
     // can need one or more of SWITCH_PRIMARY/SWITCH_PHASE/SWITCH_POLARITY
     // flipped. Replaces flags wholesale and resets decoder state.
-    void setFlags(uint32_t flags);
+    void     setFlags(uint32_t flags);
+    uint32_t flags() const { return flags_; }
 
     void pushFrames(const int16_t* stereo, int frames);
 

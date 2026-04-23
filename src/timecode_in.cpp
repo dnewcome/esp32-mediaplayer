@@ -20,10 +20,14 @@ constexpr int PUMP_FRAMES = 256;
 int16_t       rxBuf_[PUMP_FRAMES * 2];
 
 // Per-window diagnostics. Written by the task, read+reset by the main
-// loop via takeStats(). 32-bit reads/writes are atomic on ESP32 — a
-// rare race where a sample lands in the next window is harmless.
-volatile int16_t  statsPeak_   = 0;
-volatile uint32_t statsFrames_ = 0;
+// loop via takeStats(). Guarded by a portMUX spinlock — the naive
+// volatile + read-modify-write approach lets the task clobber
+// takeStats()'s reset, which carries the old peak into the next
+// window. Under a clipping carrier the result was "peak pinned at
+// 32767 forever" even after the real signal normalised.
+int16_t         statsPeak_   = 0;
+uint32_t        statsFrames_ = 0;
+portMUX_TYPE    statsMux_    = portMUX_INITIALIZER_UNLOCKED;
 
 TaskHandle_t      tcTask_ = nullptr;
 
@@ -59,17 +63,21 @@ void taskEntry(void*) {
         int frames = got / bytesPerFrame;
         if (frames <= 0) { vTaskDelay(pdMS_TO_TICKS(2)); continue; }
 
-        // Scan for peak before handing off to the decoder — it doesn't
-        // track amplitude and we don't want a second buffer pass
-        // elsewhere. INT16_MIN's |.| overflows int16_t, so clamp it.
-        int16_t peak = statsPeak_;
+        // Scan for this batch's peak (not accumulated across batches —
+        // cross-batch accumulation belongs inside the critical section,
+        // otherwise a takeStats() reset between read and write gets
+        // clobbered). INT16_MIN's |.| overflows int16_t, so clamp it.
+        int16_t batchPeak = 0;
         for (int i = 0; i < frames * 2; ++i) {
             int16_t s = rxBuf_[i];
             int16_t a = (s == INT16_MIN) ? INT16_MAX : (int16_t)(s < 0 ? -s : s);
-            if (a > peak) peak = a;
+            if (a > batchPeak) batchPeak = a;
         }
-        statsPeak_   = peak;
-        statsFrames_ = statsFrames_ + (uint32_t)frames;
+
+        taskENTER_CRITICAL(&statsMux_);
+        if (batchPeak > statsPeak_) statsPeak_ = batchPeak;
+        statsFrames_ += (uint32_t)frames;
+        taskEXIT_CRITICAL(&statsMux_);
 
         dec_.pushFrames(rxBuf_, frames);
     }
@@ -110,10 +118,18 @@ bool    locked()   { return dec_.locked(); }
 int32_t position() { return dec_.position(); }
 
 Stats   takeStats() {
-    Stats s{ (int16_t)statsPeak_, (uint32_t)statsFrames_ };
+    taskENTER_CRITICAL(&statsMux_);
+    Stats s{ statsPeak_, statsFrames_ };
     statsPeak_   = 0;
     statsFrames_ = 0;
+    taskEXIT_CRITICAL(&statsMux_);
     return s;
+}
+
+uint32_t cycleFlags() {
+    uint32_t f = (dec_.flags() + 1u) & 0x7u;
+    dec_.setFlags(f);
+    return f;
 }
 
 } // namespace timecode_in

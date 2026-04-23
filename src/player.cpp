@@ -18,8 +18,12 @@ namespace player {
 namespace {
 
 // The AudioBoardStream lives in `codec` — shared with timecode_in so the
-// RX path can capture line-in simultaneously.
+// RX path can capture line-in simultaneously. For the TX write side we
+// use codec::txSink(), a pass-through wrapper that logs PCM peak to
+// diagnose DAC-vs-ADC coupling. RX drain and I²S reclocks still go
+// through kit() directly.
 inline AudioBoardStream& kit() { return codec::kit(); }
+inline AudioStream&      out() { return codec::txSink(); }
 
 MP3DecoderHelix mp3;
 WAVDecoder      wav;
@@ -41,8 +45,13 @@ WAVDecoder      wav;
 wsola::WsolaStream wsolaStage(kit());   // audio-tools AudioStream wrapper (see wsola.h)
 
 // Two encoded streams; we point the copier at whichever matches the file type.
-EncodedAudioStream mp3ToKit (&kit(),      &mp3);
-EncodedAudioStream wavToKit (&kit(),      &wav);
+// Pitched modes go through out() — the TX peak tap; keylock routes via WSOLA
+// which writes to kit directly. Cast to Print* explicitly: the AudioStream*
+// constructor overload calls setStream() which sets up a read-back path we
+// don't need and may bypass our tap. Print* overload calls setOutput()
+// directly, matching what worked before with &kit().
+EncodedAudioStream mp3ToKit ((Print*)&out(), &mp3);
+EncodedAudioStream wavToKit ((Print*)&out(), &wav);
 EncodedAudioStream mp3ToWsola(&wsolaStage, &mp3);
 EncodedAudioStream wavToWsola(&wsolaStage, &wav);
 
