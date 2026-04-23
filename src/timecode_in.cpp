@@ -1,5 +1,9 @@
 #include "timecode_in.h"
 
+#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
 #include "codec.h"
 #include "config.h"
 #include "timecode.h"
@@ -9,17 +13,67 @@ namespace timecode_in {
 namespace {
 
 timecode::Decoder dec_;
-bool              enabled_ = false;
+volatile bool     enabled_ = false;
 
 // Pump buffer: 256 stereo int16 frames = 1024 bytes, ~5.8 ms at 44.1kHz.
-// Small enough that tick() returns fast; large enough that the I²S DMA
-// isn't hammered on every loop iteration.
 constexpr int PUMP_FRAMES = 256;
 int16_t       rxBuf_[PUMP_FRAMES * 2];
 
-// Per-window diagnostics, cleared by takeStats().
-int16_t  statsPeak_   = 0;
-uint32_t statsFrames_ = 0;
+// Per-window diagnostics. Written by the task, read+reset by the main
+// loop via takeStats(). 32-bit reads/writes are atomic on ESP32 — a
+// rare race where a sample lands in the next window is harmless.
+volatile int16_t  statsPeak_   = 0;
+volatile uint32_t statsFrames_ = 0;
+
+TaskHandle_t      tcTask_ = nullptr;
+
+// Task body: continuously drains the codec RX ring and feeds the
+// decoder. Lives on core 0 so it runs in parallel with the Arduino
+// main loop (and player audio pipeline) on core 1 — before this was a
+// task, tick() in loop() starved I²S TX enough to distort playback.
+void taskEntry(void*) {
+    auto& k = codec::kit();
+    constexpr int bytesPerFrame = 2 /*ch*/ * sizeof(int16_t);
+    constexpr int maxBytes      = PUMP_FRAMES * bytesPerFrame;
+
+    for (;;) {
+        if (!enabled_) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        int avail = k.available();
+        if (avail < bytesPerFrame) {
+            // Sleep short enough that the RX DMA ring can't overflow
+            // between polls, but long enough to yield real cycles back
+            // to core 0's idle/watchdog tasks.
+            vTaskDelay(pdMS_TO_TICKS(2));
+            continue;
+        }
+
+        int want = avail < maxBytes ? avail : maxBytes;
+        want -= want % bytesPerFrame;
+        if (want <= 0) { vTaskDelay(pdMS_TO_TICKS(2)); continue; }
+
+        int got = k.readBytes((uint8_t*)rxBuf_, want);
+        int frames = got / bytesPerFrame;
+        if (frames <= 0) { vTaskDelay(pdMS_TO_TICKS(2)); continue; }
+
+        // Scan for peak before handing off to the decoder — it doesn't
+        // track amplitude and we don't want a second buffer pass
+        // elsewhere. INT16_MIN's |.| overflows int16_t, so clamp it.
+        int16_t peak = statsPeak_;
+        for (int i = 0; i < frames * 2; ++i) {
+            int16_t s = rxBuf_[i];
+            int16_t a = (s == INT16_MIN) ? INT16_MAX : (int16_t)(s < 0 ? -s : s);
+            if (a > peak) peak = a;
+        }
+        statsPeak_   = peak;
+        statsFrames_ = statsFrames_ + (uint32_t)frames;
+
+        dec_.pushFrames(rxBuf_, frames);
+    }
+}
 
 } // namespace
 
@@ -34,50 +88,21 @@ void begin() {
     // decoder's primary/secondary assignment back in phase with Serato's
     // forward direction. Found by bring-up test with real vinyl + deck.
     dec_.setFlags(timecode::SWITCH_PRIMARY);
+
+    // Pin to core 0. Arduino's loop() (and the audio copier it drives)
+    // runs on core 1, so this keeps decode CPU off the audio path.
+    // Priority 5 is higher than loopTask's default 1 but lower than the
+    // I²S/Wi-Fi service tasks — enough to drain promptly without
+    // preempting critical-path work.
+    xTaskCreatePinnedToCore(taskEntry, "tcin", 4096, nullptr, 5, &tcTask_, 0);
 }
 
 void setEnabled(bool on) { enabled_ = on; }
 bool enabled()           { return enabled_; }
 
 void tick() {
-    if (!enabled_) return;
-
-    // AudioBoardStream inherits Stream::available() / readBytes(). Drain
-    // everything queued, not just one PUMP_FRAMES slice — with the audio
-    // pipeline active the main loop can take >6 ms per iteration, so a
-    // single 256-frame drain per call leaves the I²S RX ring overflowing
-    // and the decoder sees discontinuous audio (won't lock). Safety cap
-    // of 8 iterations keeps any one tick() bounded (~46 ms of audio).
-    auto& k = codec::kit();
-    constexpr int bytesPerFrame = 2 /*ch*/ * sizeof(int16_t);
-    constexpr int maxBytes      = PUMP_FRAMES * bytesPerFrame;
-
-    for (int iter = 0; iter < 8; ++iter) {
-        int avail = k.available();
-        if (avail < bytesPerFrame) break;
-        int want = avail < maxBytes ? avail : maxBytes;
-        want -= want % bytesPerFrame;
-        if (want <= 0) break;
-
-        int got = k.readBytes((uint8_t*)rxBuf_, want);
-        int frames = got / bytesPerFrame;
-        if (frames <= 0) break;
-
-        // Scan for peak before handing off to the decoder — it doesn't
-        // track amplitude and we don't want a second buffer pass
-        // elsewhere. INT16_MIN's |.| overflows int16_t, so clamp it.
-        for (int i = 0; i < frames * 2; ++i) {
-            int16_t s = rxBuf_[i];
-            int16_t a = (s == INT16_MIN) ? INT16_MAX : (int16_t)(s < 0 ? -s : s);
-            if (a > statsPeak_) statsPeak_ = a;
-        }
-        statsFrames_ += (uint32_t)frames;
-        dec_.pushFrames(rxBuf_, frames);
-
-        // If the codec gave us less than we asked for, the ring is empty
-        // — no point looping again this tick.
-        if (got < want) break;
-    }
+    // Drain now happens in taskEntry() on core 0. Kept as a no-op so
+    // the existing main-loop call site stays valid.
 }
 
 float   speed()    { return dec_.speed(); }
@@ -85,7 +110,7 @@ bool    locked()   { return dec_.locked(); }
 int32_t position() { return dec_.position(); }
 
 Stats   takeStats() {
-    Stats s{ statsPeak_, statsFrames_ };
+    Stats s{ (int16_t)statsPeak_, (uint32_t)statsFrames_ };
     statsPeak_   = 0;
     statsFrames_ = 0;
     return s;
