@@ -177,6 +177,11 @@ void prebuildLut(Format f) {
 #endif
 }
 
+uint32_t totalDurationMs(Format f) {
+    const Def& d = findDef(f);
+    return d.resolution > 0 ? (uint32_t)((uint64_t)d.length * 1000 / d.resolution) : 0;
+}
+
 void rebuildLutInPlace(Format f) {
 #ifndef TIMECODE_NATIVE
     if (g_devLut_ == nullptr) return;  // no buffer to rewrite

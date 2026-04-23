@@ -66,6 +66,11 @@ void prebuildLut(Format f);
 // initial format. No-op if prebuildLut hasn't run yet or on host.
 void rebuildLutInPlace(Format f);
 
+// Nominal total duration of the timecode media in milliseconds,
+// derived from format length × (1000 / resolutionHz). Vinyl: 712000,
+// CD: 950000. Used by the seek-from-position mapping.
+uint32_t totalDurationMs(Format f);
+
 class Decoder {
 public:
     void begin(int sampleRate, Format fmt = Format::SeratoControlCD);

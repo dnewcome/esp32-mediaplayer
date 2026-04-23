@@ -486,17 +486,30 @@ void driveFromTimecode() {
     const uint32_t now  = millis();
     const bool     sane = (m >= SPEED_MIN && m <= SPEED_MAX);
 
+    // In Proportional mode, the effective player rate is not 1× of the
+    // decoder speed — it's scaled by (track_dur / vinyl_len). A 3-min
+    // track on 12-min vinyl plays at 0.25× when tc walks at 1×. Without
+    // this multiplier the seek block fires every 300 ms to catch up the
+    // overshoot, which works but sounds awful (constant WSOLA resets).
+    float transportScale = 1.0f;
+    if (player::transportMode() == player::TransportMode::Proportional) {
+        uint32_t dur = player::trackDurationMs();
+        uint32_t vin = timecode_in::totalDurationMs();
+        if (dur > 0 && vin > 0) transportScale = (float)dur / (float)vin;
+    }
+
     if (sane) {
         lastSaneMs = now;
         // EMA on the magnitude. Raw decoder speed has ~1% jitter per
         // report window even on a clean lock; updating the player on
         // every raw sample churns WSOLA and reads as audible warble.
         smoothed = smoothed + SPEED_EMA_ALPHA * (m - smoothed);
-        const float delta = smoothed > lastApplied ? smoothed - lastApplied : lastApplied - smoothed;
+        const float effective = smoothed * transportScale;
+        const float delta = effective > lastApplied ? effective - lastApplied : lastApplied - effective;
         if (delta >= DELTA_EPSILON && now - lastApplyMs >= APPLY_INTERVAL_MS) {
-            player::setSpeed(smoothed);
+            player::setSpeed(effective);
             lastApplyMs = now;
-            lastApplied = smoothed;
+            lastApplied = effective;
             steering    = true;
         }
     } else if (steering && (now - lastSaneMs >= RELEASE_MS)) {
@@ -504,6 +517,78 @@ void driveFromTimecode() {
         lastApplied = 1.0f;
         smoothed    = 1.0f;
         steering    = false;
+    }
+
+    // --- Position-driven seek (Phase 6) ---
+    //
+    // Speed control above handles continuous-drift playback; the
+    // position block handles DISCONTINUITIES — needle drops, scratches,
+    // seeks to a new groove. Only fires when the decoder has achieved
+    // bit-lock (position >= 0); without lock we can't distinguish "still
+    // at same spot" from "jumped". Steady playback has the decoder's
+    // reported position drift naturally in sync with the player's byte
+    // pointer, so the drift stays below SEEK_DRIFT_THRESHOLD_MS and no
+    // seek fires.
+    //
+    // Needle-up handling: if the decoder loses lock for longer than
+    // UNLOCK_PAUSE_MS, pause the player. On re-lock, the first
+    // position-driven seek snaps playback to the new groove; unpause
+    // the same way (trailing edge of unlock window).
+    constexpr uint32_t SEEK_DRIFT_THRESHOLD_MS = 300;   // below ~1 beat, above decoder/setSpeed jitter
+    constexpr uint32_t SEEK_MIN_INTERVAL_MS    = 250;   // rate-limit WSOLA resets
+    constexpr uint32_t UNLOCK_PAUSE_MS         = 400;   // hysteresis against brief lock blips
+
+    static uint32_t lastSeekMs    = 0;
+    static uint32_t lastLockedMs  = 0;
+    static bool     pausedByTc    = false;
+
+    const bool lockedNow = timecode_in::locked();
+    if (lockedNow) {
+        lastLockedMs = now;
+        if (pausedByTc && player::isPaused()) {
+            player::togglePause();
+            pausedByTc = false;
+            Serial.println(F("[tc] lock restored → unpause"));
+        }
+    } else {
+        if (!pausedByTc && !player::isPaused()
+              && now - lastLockedMs >= UNLOCK_PAUSE_MS) {
+            // Needle up / signal lost for long enough — pause.
+            player::togglePause();
+            pausedByTc = true;
+            Serial.println(F("[tc] unlock >400 ms → pause (needle up)"));
+        }
+        return;  // can't seek without a position; speed logic above already handled
+    }
+
+    const int32_t tc_cycles = timecode_in::position();
+    if (tc_cycles < 0) return;
+    const int hz = timecode_in::resolutionHz();
+    if (hz <= 0) return;
+    const uint32_t tc_ms   = (uint32_t)((int64_t)tc_cycles * 1000 / hz);
+    const uint32_t vinyl   = timecode_in::totalDurationMs();
+    const uint32_t dur     = player::trackDurationMs();
+    if (dur == 0 || vinyl == 0) return;   // no duration, can't map
+
+    const uint32_t target = mapTcToTrackMs(tc_ms, dur, vinyl, player::transportMode());
+
+    // Past-end policy (selected by Dan): stop at end.
+    if (target >= dur) {
+        if (player::isPlaying()) player::stop();
+        return;
+    }
+
+    const uint32_t cur   = player::positionMs();
+    const uint32_t drift = cur > target ? cur - target : target - cur;
+    if (drift >= SEEK_DRIFT_THRESHOLD_MS
+          && now - lastSeekMs >= SEEK_MIN_INTERVAL_MS) {
+        if (player::seekToMs(target)) {
+            lastSeekMs = now;
+            Serial.printf("[tc] seek drift=%u → %u ms (mode=%s)\n",
+                          (unsigned)drift, (unsigned)target,
+                          player::transportMode() == player::TransportMode::Absolute
+                            ? "ABS" : "PROP");
+        }
     }
 }
 

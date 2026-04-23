@@ -60,4 +60,11 @@ bool localLoop();
 void cycleFormat();
 bool isCdFormat();
 
+// Decoder sample-resolution (Hz) and total timecode duration (ms) for
+// the currently-selected format. Used by driveFromTimecode to convert
+// a cycle-index position into a millisecond time and to scale
+// Proportional mapping against the vinyl length.
+int      resolutionHz();
+uint32_t totalDurationMs();
+
 } // namespace timecode_in

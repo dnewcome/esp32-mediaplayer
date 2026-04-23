@@ -247,6 +247,9 @@ bool isCdFormat() {
     return fmt_ == timecode::Format::SeratoControlCD;
 }
 
+int      resolutionHz()    { return dec_.resolutionHz(); }
+uint32_t totalDurationMs() { return timecode::totalDurationMs(fmt_); }
+
 bool setLocalLoop(bool on) {
     wantLocalLoop_ = on;
     // Actual open/close + success confirmation happens in the task loop;

@@ -31,8 +31,12 @@ constexpr int PIN_BTN_CUE  = 22;
 
 // --- Pitch / speed ---
 // Phase 1: naive resampling — pitch changes with speed.
-// Phase 2: WSOLA time-stretch will decouple speed from pitch (keylock).
-constexpr float SPEED_MIN  = 0.5f;
+// Phase 2: WSOLA time-stretch decouples speed from pitch (keylock).
+// SPEED_MIN was 0.5f but Proportional-mapped timecode needs much slower
+// effective rates: a 3-minute track on a 12-minute Serato Vinyl plays
+// at 3/12 = 0.25× effective when the tc walks at 1×. WSOLA handles
+// that cleanly; audio quality degrades toward 0.1× but still usable.
+constexpr float SPEED_MIN  = 0.1f;
 constexpr float SPEED_MAX  = 2.0f;
 constexpr float SPEED_STEP = 0.02f;
 
