@@ -17,6 +17,29 @@ constexpr uint8_t I2C_ADDR = 0x10;
 // tapping peak levels. Constructed lazily in txSink() so it can reference
 // kit() safely across translation-unit init ordering.
 VolumeMeter* txMeter_ = nullptr;
+
+// Track current output volume (0..100) at file scope so begin() and
+// adjustOutputVolume() agree. Starts at DEFAULT_VOLUME so the first `v`/
+// `V` press doesn't jump from a stale 100.
+//
+// Why not 100: the ES8388's DAC output amps crosstalk onto the ADC
+// LINE IN at roughly unity gain by the time PGA=+24dB is applied.
+// Running the DAC at ~50% keeps the crosstalk below the typical
+// turntable timecode level (~21k peak on vinyl at 33⅓), which is what
+// lets pitch tracking work at all. Turn up with `V` if you don't need
+// concurrent timecode decoding; turn up externally on the DJ mixer if
+// you do.
+constexpr int DEFAULT_VOLUME = 50;
+int outputVol_ = DEFAULT_VOLUME;
+
+// Input PGA default. Library default is 100 (+24 dB), which rails the
+// ADC on a live turntable cartridge feeding LINE2 on Dan's bring-up
+// hardware. 0 (~0 dB) lets the line-level signal sit at rx ~1000 —
+// well above the coupling floor and far from clipping — which is what
+// finally let the decoder lock. If your source is quieter (mic, RIAA
+// preamp output), bump with G.
+constexpr int DEFAULT_INPUT_GAIN = 0;
+int inputGain_ = DEFAULT_INPUT_GAIN;
 } // namespace
 
 AudioStream& txSink() {
@@ -69,9 +92,13 @@ void begin() {
     k.begin(cfg);
     started_ = true;
 
-    // PGA left at library default (+24 dB). Worked for headphone-out;
-    // line-level sources may rail and need `g` presses to attenuate.
-    // Live-adjustable via adjustInputGain().
+    // Clamp default DAC volume so DAC→ADC crosstalk stays below
+    // turntable timecode level (see DEFAULT_VOLUME comment above).
+    k.setVolume((float)outputVol_ / 100.0f);
+
+    // Set input PGA to 0 dB for turntable line-level signal — see
+    // DEFAULT_INPUT_GAIN comment above. G to boost at runtime.
+    k.setInputVolume(inputGain_);
 
     if (txMeter_) txMeter_->begin();
 }
@@ -83,30 +110,27 @@ void adjustOutputVolume(int delta) {
     // a 10× gain, clipping every sample, which reads as "still max
     // loud" until the int hits 0 and it mutes. Track 0..100 for UX but
     // scale to 0.0..1.0 at the boundary.
-    static int vol = 100;
-    vol += delta;
-    if (vol < 0)   vol = 0;
-    if (vol > 100) vol = 100;
-    kit().setVolume((float)vol / 100.0f);
+    outputVol_ += delta;
+    if (outputVol_ < 0)   outputVol_ = 0;
+    if (outputVol_ > 100) outputVol_ = 100;
+    kit().setVolume((float)outputVol_ / 100.0f);
     Serial.print(F("output volume: "));
-    Serial.print(vol);
+    Serial.print(outputVol_);
     Serial.println(F("/100"));
 }
 
 void adjustInputGain(int delta) {
     // setInputVolume takes 0..100, mapped internally to MIC_GAIN_0DB..24DB in
-    // 3 dB steps. Track our own value since the library doesn't expose a
-    // getter. Start at 100 because codec::begin leaves PGA at the library
-    // default (+24 dB), so pressing g from here actually decreases gain.
-    static int vol = 100;
-    vol += delta;
-    if (vol < 0)   vol = 0;
-    if (vol > 100) vol = 100;
-    kit().setInputVolume(vol);
+    // 3 dB steps. File-scope counter stays in sync with what begin()
+    // installed, so the first `g`/`G` press moves from the real state.
+    inputGain_ += delta;
+    if (inputGain_ < 0)   inputGain_ = 0;
+    if (inputGain_ > 100) inputGain_ = 100;
+    kit().setInputVolume(inputGain_);
     Serial.print(F("input gain: "));
-    Serial.print(vol);
+    Serial.print(inputGain_);
     Serial.print(F("/100  (~"));
-    Serial.print((vol * 24) / 100);
+    Serial.print((inputGain_ * 24) / 100);
     Serial.println(F(" dB)"));
 }
 
