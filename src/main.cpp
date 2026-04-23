@@ -372,6 +372,27 @@ void loop() {
         }
     }
 
+    // Timecode bring-up trace: once a second while timecode_in is armed,
+    // independent of playback. Prints decoder state plus raw rx peak and
+    // frames-per-window so we can tell "no signal" from "locked" from
+    // "seeing signal but not locked yet" without opening a track.
+    static uint32_t lastTcTraceMs = 0;
+    if (timecode_in::enabled()) {
+        uint32_t now = millis();
+        if (now - lastTcTraceMs >= 1000) {
+            lastTcTraceMs = now;
+            auto st = timecode_in::takeStats();
+            Serial.print(F("[tc] speed="));
+            Serial.print(timecode_in::speed(), 3);
+            Serial.print(F("  locked="));
+            Serial.print(timecode_in::locked() ? 1 : 0);
+            Serial.print(F("  peak="));
+            Serial.print(st.peak);
+            Serial.print(F("  frames="));
+            Serial.println(st.frames);
+        }
+    }
+
     auto e = controls::poll();
     if (e == controls::Event::None) return;
 

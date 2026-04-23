@@ -38,6 +38,16 @@
 
 namespace timecode {
 
+// Decoder convention flags (used with Decoder::setFlags). The format
+// baseline assumes the xwax canonical signal chain; real hardware may
+// need one or more of these to match its wiring:
+//   SWITCH_PHASE    — invert direction decision at zero crossings
+//   SWITCH_PRIMARY  — swap which channel is primary vs secondary (L↔R)
+//   SWITCH_POLARITY — flip bit polarity (loud vs quiet → 1 vs 0)
+constexpr uint32_t SWITCH_PHASE    = 0x1;
+constexpr uint32_t SWITCH_PRIMARY  = 0x2;
+constexpr uint32_t SWITCH_POLARITY = 0x4;
+
 enum class Format : uint8_t {
     SeratoControlVinyl,
     SeratoControlCD,
@@ -47,6 +57,13 @@ class Decoder {
 public:
     void begin(int sampleRate, Format fmt = Format::SeratoControlCD);
     void reset();
+
+    // Convention override. The format-table baseline covers the xwax
+    // canonical decode; real-world signals (channel swaps in the codec
+    // or cabling, opposite direction convention, inverted bit polarity)
+    // can need one or more of SWITCH_PRIMARY/SWITCH_PHASE/SWITCH_POLARITY
+    // flipped. Replaces flags wholesale and resets decoder state.
+    void setFlags(uint32_t flags);
 
     void pushFrames(const int16_t* stereo, int frames);
 

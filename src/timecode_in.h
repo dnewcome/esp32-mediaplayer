@@ -28,4 +28,12 @@ float   speed();
 bool    locked();
 int32_t position();   // -1 on ESP32 (LUT is Phase 2 work)
 
+// Bring-up diagnostics. `peak` is the max |sample| observed across both
+// channels since the last takeStats() call; `frames` is how many stereo
+// frames tick() drained from the codec in that window. Reading clears
+// both, so successive calls show per-window counters. Useful for
+// answering "is line-in even seeing signal?" before the decoder locks.
+struct Stats { int16_t peak; uint32_t frames; };
+Stats   takeStats();
+
 } // namespace timecode_in

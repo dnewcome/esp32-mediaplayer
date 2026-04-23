@@ -21,10 +21,6 @@ constexpr int     REF_PEAKS_AVG    = 48;       // cycles; EMA window
 constexpr int     VALID_BITS       = 24;       // bits correct before "locked"
 constexpr float   SPEED_EMA_ALPHA  = 0.15f;
 
-constexpr uint32_t SWITCH_PHASE    = 0x1;
-constexpr uint32_t SWITCH_PRIMARY  = 0x2;
-constexpr uint32_t SWITCH_POLARITY = 0x4;
-
 struct Def {
     Format   fmt;
     int      resolution;
@@ -131,6 +127,11 @@ void Decoder::begin(int sampleRate, Format fmt) {
     threshold_        = ZERO_THRESH;
     refPeriodSamples_ = (float)sampleRate / (float)resolution_;
 
+    reset();
+}
+
+void Decoder::setFlags(uint32_t flags) {
+    flags_ = flags;
     reset();
 }
 

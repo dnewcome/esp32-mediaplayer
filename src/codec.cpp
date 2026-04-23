@@ -25,6 +25,10 @@ void begin() {
     cfg.sample_rate     = cfg::SAMPLE_RATE;
     cfg.channels        = cfg::CHANNELS;
     cfg.bits_per_sample = cfg::BITS_PER_SAMPLE;
+    // Route the ADC to LINPUT2/RINPUT2 — the external 3.5mm aux-in jack on
+    // A1S V2.3 boards. The library default (ADC_INPUT_LINE1) is the
+    // on-board differential mic pair, which ignores the jack entirely.
+    cfg.input_device    = ADC_INPUT_LINE2;
     k.begin(cfg);
     started_ = true;
 }
