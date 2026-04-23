@@ -334,10 +334,49 @@ void pollSerial() {
 // When timecode lock is held, drive player speed from the vinyl. Only
 // applies during playback; if the deck isn't playing there's nothing
 // to steer. Speed is clamped by player::setSpeed().
+//
+// Hysteresis: one-window lock flickers (a momentary bit error during
+// platter spin-up) can latch a bad speed and never get cleared, freezing
+// playback at something like 0.90×. So we only steer after lock has
+// been held continuously for LOCK_HOLD_MS, and revert to 1.0× after
+// LOCK_DROP_MS of continuous unlock (treat as "needle up / signal gone").
 void driveFromTimecode() {
-    if (!timecode_in::enabled() || !timecode_in::locked()) return;
     if (!player::isPlaying()) return;
-    player::setSpeed(timecode_in::speed());
+
+    constexpr uint32_t LOCK_HOLD_MS = 100;
+    constexpr uint32_t LOCK_DROP_MS = 500;
+
+    static uint32_t lockedSinceMs   = 0;
+    static uint32_t unlockedSinceMs = 0;
+    static bool     wasLocked       = false;
+    static bool     steering        = false;
+
+    if (!timecode_in::enabled()) {
+        // Disarming releases any timecode-held speed so manual control
+        // isn't fighting a frozen value from the last session.
+        if (steering) { player::setSpeed(1.0f); steering = false; }
+        wasLocked = false;
+        return;
+    }
+
+    const bool     locked = timecode_in::locked();
+    const uint32_t now    = millis();
+
+    if (locked != wasLocked) {
+        if (locked) lockedSinceMs   = now;
+        else        unlockedSinceMs = now;
+        wasLocked = locked;
+    }
+
+    if (locked) {
+        if (now - lockedSinceMs >= LOCK_HOLD_MS) {
+            player::setSpeed(timecode_in::speed());
+            steering = true;
+        }
+    } else if (steering && (now - unlockedSinceMs >= LOCK_DROP_MS)) {
+        player::setSpeed(1.0f);
+        steering = false;
+    }
 }
 
 } // namespace
