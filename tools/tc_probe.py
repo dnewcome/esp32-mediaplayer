@@ -181,6 +181,46 @@ def scenario_turntable(ser):
     time.sleep(0.5)
 
 
+def scenario_smoothing(ser):
+    """Self-loop with keylock to characterize decoder jitter vs EMA-
+    smoothed player speed. Platter-independent (use this for calibration
+    when the turntable isn't stable).
+
+    In keylock mode WSOLA preserves pitch, so the DAC-driven carrier
+    stays at 1 kHz regardless of player speed — the decoder always
+    reports ~1.0×, which is exactly the steady-state we want to measure
+    smoothing on.
+    """
+    ensure_tc_on(ser)
+    time.sleep(1.5)
+    # Boost PGA for the self-loop only. The default PGA=0 makes sense
+    # for a line-level turntable cartridge but leaves the coupled
+    # self-loop signal down in the noise. ~18 dB (75/100) restores a
+    # decodable rx on the coupling path.
+    for i in range(8):
+        send(ser, "G", f"PGA +3dB (tap {i+1})"); time.sleep(0.15)
+    time.sleep(0.8)
+    send(ser, "K", "enable keylock")
+    time.sleep(0.5)
+
+    # timecode.wav = index 2.
+    for _ in range(10):
+        send(ser, "w", "top"); time.sleep(0.15)
+    time.sleep(0.3)
+    for i in range(2):
+        send(ser, "s", f"down {i+1}"); time.sleep(0.15)
+    time.sleep(0.3)
+    send(ser, "\r", "play timecode.wav")
+    time.sleep(4.0)
+
+    print("----- OBSERVE 20s — compare [tc] speed (raw) vs [play] speed (smoothed) -----", flush=True)
+    time.sleep(20.0)
+
+    send(ser, "b", "stop")
+    time.sleep(0.5)
+    send(ser, "K", "disable keylock")
+
+
 def scenario_selfloop(ser):
     """Play timecode.wav → DAC→ADC coupling → decoder. Closed self-test.
 
@@ -309,6 +349,8 @@ def main():
             scenario_sine(ser)
         elif scenario == "selfloop":
             scenario_selfloop(ser)
+        elif scenario == "smoothing":
+            scenario_smoothing(ser)
         elif scenario == "turntable":
             scenario_turntable(ser)
         elif scenario == "outputs":

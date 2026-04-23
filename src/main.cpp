@@ -392,34 +392,49 @@ void driveFromTimecode() {
     // every jitter to setSpeed reclocks I²S thousands of times per
     // minute, which is the audible "glitchy pitch" symptom.
     constexpr float    DELTA_EPSILON     = 0.01f;  // 1 % change minimum
+    // EMA smoothing factor on decoder magnitude. 0.15 cuts raw jitter
+    // by ~3× at steady state while still catching a platter nudge
+    // within ~10 updates (~100 ms at typical decoder report rate).
+    constexpr float    SPEED_EMA_ALPHA   = 0.15f;
 
     static uint32_t lastApplyMs  = 0;
     static uint32_t lastSaneMs   = 0;
     static float    lastApplied  = 1.0f;
+    static float    smoothed     = 1.0f;
     static bool     steering     = false;
 
     if (!timecode_in::enabled()) {
-        if (steering) { player::setSpeed(1.0f); steering = false; lastApplied = 1.0f; }
+        if (steering) { player::setSpeed(1.0f); steering = false; lastApplied = 1.0f; smoothed = 1.0f; }
         return;
     }
 
     const float    s    = timecode_in::speed();
+    // Work in magnitude — player::setSpeed clamps negative values up to
+    // SPEED_MIN, which was the cause of the "stuck at 0.5×" bug when
+    // SWITCH_PRIMARY flipped the sign. Reverse-scratch (negative speed
+    // playback) is a separate Phase 2 feature; for now, platter spinning
+    // either direction should pitch the track forward.
     const float    m    = s < 0 ? -s : s;
     const uint32_t now  = millis();
     const bool     sane = (m >= SPEED_MIN && m <= SPEED_MAX);
 
     if (sane) {
         lastSaneMs = now;
-        const float delta = s > lastApplied ? s - lastApplied : lastApplied - s;
+        // EMA on the magnitude. Raw decoder speed has ~1% jitter per
+        // report window even on a clean lock; updating the player on
+        // every raw sample churns WSOLA and reads as audible warble.
+        smoothed = smoothed + SPEED_EMA_ALPHA * (m - smoothed);
+        const float delta = smoothed > lastApplied ? smoothed - lastApplied : lastApplied - smoothed;
         if (delta >= DELTA_EPSILON && now - lastApplyMs >= APPLY_INTERVAL_MS) {
-            player::setSpeed(s);
+            player::setSpeed(smoothed);
             lastApplyMs = now;
-            lastApplied = s;
+            lastApplied = smoothed;
             steering    = true;
         }
     } else if (steering && (now - lastSaneMs >= RELEASE_MS)) {
         player::setSpeed(1.0f);
         lastApplied = 1.0f;
+        smoothed    = 1.0f;
         steering    = false;
     }
 }
